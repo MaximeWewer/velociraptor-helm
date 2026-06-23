@@ -1,8 +1,6 @@
 # Velociraptor Helm Chart
 
-Hardened Helm chart for [Velociraptor](https://github.com/Velocidex/velociraptor) (DFIR server) on Kubernetes, built to the [intelowl-helm](https://github.com/MaximeWewer/intelowl-helm) quality standard.
-
-> **Velociraptor** is an open-source endpoint visibility / DFIR platform.
+Hardened Helm chart for [Velociraptor](https://github.com/Velocidex/velociraptor) (DFIR server) on Kubernetes.
 
 Runs a hardened **distroless, rootless** rebuild of the server image, published from
 [velociraptor-docker](https://github.com/MaximeWewer/velociraptor-docker)

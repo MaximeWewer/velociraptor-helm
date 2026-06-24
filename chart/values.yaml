@@ -9,7 +9,7 @@ image:
   # Hardened distroless/rootless rebuild — built & published from
   # https://github.com/MaximeWewer/velociraptor-docker
   repository: maximewewer/velociraptor
-  tag: "0.76.6-distroless"
+  tag: "0.77.1-distroless"
   # Pin by digest in production (overrides tag): sha256:...
   digest: ""
   pullPolicy: IfNotPresent

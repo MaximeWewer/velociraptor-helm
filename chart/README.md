@@ -72,7 +72,7 @@ helm upgrade velo . -n dfir \
 | Key | Default | Description |
 |-----|---------|-------------|
 | `image.registry` / `image.repository` | `ghcr.io` / `maximewewer/velociraptor` | Hardened distroless rebuild ([velociraptor-docker](https://github.com/MaximeWewer/velociraptor-docker)) |
-| `image.tag` | `0.76.6-distroless` | Tag; prefer `image.digest` in production |
+| `image.tag` | `0.77.1-distroless` | Tag; prefer `image.digest` in production |
 | `replicaCount` | `1` | **master** pods — **must stay 1** (single-writer datastore); scale via `frontend.minions` |
 | `config.existingSecret` | `""` | Secret containing `server.config.yaml` (**required in production**) |
 | `config.inline` | `""` | Inline config (TEST only) |
@@ -168,7 +168,7 @@ helm upgrade velo . -n dfir \
 | image.pullPolicy | string | `"IfNotPresent"` |  |
 | image.registry | string | `"ghcr.io"` |  |
 | image.repository | string | `"maximewewer/velociraptor"` |  |
-| image.tag | string | `"0.76.6-distroless"` |  |
+| image.tag | string | `"0.77.1-distroless"` |  |
 | imagePullSecrets | list | `[]` |  |
 | livenessProbe.failureThreshold | int | `6` |  |
 | livenessProbe.httpGet.path | string | `"/healthz"` |  |

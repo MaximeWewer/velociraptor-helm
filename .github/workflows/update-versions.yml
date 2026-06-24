@@ -23,15 +23,22 @@ jobs:
           tar -xf helm-docs.tar.gz helm-docs
           sudo mv helm-docs /usr/local/bin/helm-docs
 
-      - name: Get latest Velociraptor release
+      - name: Get Velociraptor version from velociraptor-docker
         id: velo
         run: |
-          # Velocidex/velociraptor stable release (the latest endpoint skips prereleases/rc).
-          TAG=$(curl -s https://api.github.com/repos/Velocidex/velociraptor/releases/latest | jq -r '.tag_name')
+          # The hardened "<version>-distroless" image is published from velociraptor-docker.
+          # Its Dockerfile `ARG VELO_VERSION` is the single source of truth for what is
+          # actually built/pushed — track it so the chart never points at a missing tag.
+          VELO_VERSION=$(curl -s https://raw.githubusercontent.com/MaximeWewer/velociraptor-docker/main/Dockerfile \
+            | grep -oP '^ARG VELO_VERSION=\K\S+')
+          if [ -z "$VELO_VERSION" ]; then
+            echo "ERROR: could not read ARG VELO_VERSION from velociraptor-docker Dockerfile" >&2
+            exit 1
+          fi
           # Strip leading 'v' -> semver base used by appVersion and the image tag.
-          CORE="${TAG#v}"
+          CORE="${VELO_VERSION#v}"
           echo "core=${CORE}" >> $GITHUB_OUTPUT
-          echo "Velociraptor latest: ${TAG} -> ${CORE}"
+          echo "velociraptor-docker pins: ${VELO_VERSION} -> ${CORE}"
 
       - name: Update Chart.yaml
         run: |

@@ -1,0 +1,7 @@
+# Local secret overrides for inline config (never commit CA/private keys)
+secrets.yaml
+secrets.*.yaml
+server.config.yaml
+
+# Packaged charts
+*.tgz

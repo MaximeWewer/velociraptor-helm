@@ -13,7 +13,7 @@ Helm chart for [Velociraptor](https://github.com/Velocidex/velociraptor) (DFIR s
 ## Prerequisites
 
 - A Kubernetes cluster, Helm **3+**.
-- A **server config** (`server.config.yaml`, embeds the CA + private keys) generated out-of-band and stored in a Secret — the chart does not template it. See [velociraptor-docker](https://github.com/MaximeWewer/velociraptor-docker).
+- A **server config** (`server.config.yaml`, embeds the CA + private keys) generated out-of-band — the chart does not template it. Provide it either via `config.existingSecret` (a Secret you manage), or via `config.inline` when you have **no secret manager** (the chart renders the Secret for you). See [velociraptor-docker](https://github.com/MaximeWewer/velociraptor-docker).
 - Optional, only if you enable the matching feature:
   - A `ReadWriteMany` StorageClass (NFS/EFS) — for `frontend.minions` (shared master+minions datastore).
   - **Prometheus Operator** CRDs — for `serviceMonitor.enabled`.
@@ -30,6 +30,25 @@ kubectl create secret generic velo-config \
 helm install velo . -n dfir \
   --set config.existingSecret=velo-config
 ```
+
+### No secret manager (inline)
+
+No ESO/Vault/SealedSecrets? Let the chart render the config Secret from `config.inline`.
+Keep the config (CA + private keys) **out of git** — put it in a gitignored overrides
+file, or feed the file directly:
+
+```sh
+velociraptor config generate > server.config.yaml   # gitignore this file
+
+# Option A — gitignored overrides file (config.inline: | <yaml>)
+helm install velo . -n dfir -f secrets.yaml
+
+# Option B — feed the file straight into config.inline
+helm install velo . -n dfir --set-file config.inline=server.config.yaml
+```
+
+The same applies to the OIDC client secret: set `gui.oidc.clientSecret` (gitignored
+overrides) instead of `gui.oidc.existingSecret`.
 
 ## Server config checklist (production)
 
@@ -74,8 +93,8 @@ helm upgrade velo . -n dfir \
 | `image.registry` / `image.repository` | `ghcr.io` / `maximewewer/velociraptor` | Hardened distroless rebuild ([velociraptor-docker](https://github.com/MaximeWewer/velociraptor-docker)) |
 | `image.tag` | `0.77.1-distroless` | Tag; prefer `image.digest` in production |
 | `replicaCount` | `1` | **master** pods — **must stay 1** (single-writer datastore); scale via `frontend.minions` |
-| `config.existingSecret` | `""` | Secret containing `server.config.yaml` (**required in production**) |
-| `config.inline` | `""` | Inline config (TEST only) |
+| `config.existingSecret` | `""` | Secret containing `server.config.yaml` (preferred with a secret manager) |
+| `config.inline` | `""` | Inline config rendered into a chart-managed Secret — use without a secret manager; keep out of git |
 | `config.initializeServer` | `false` | Build downloadable client installers (MSI/DEB/RPM) on first boot (`Container.InitializeServer`) |
 | `customArtifacts.enabled` | `false` | Mount custom VQL artifacts (ConfigMap) at `customArtifacts.path` and load them |
 | `customArtifacts.files` / `customArtifacts.existingConfigMap` | `{}` / `""` | Inline artifacts (filename → YAML) or an existing ConfigMap |

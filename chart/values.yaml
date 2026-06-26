@@ -17,16 +17,27 @@ imagePullSecrets: []
 
 ## Server config.
 ## The Velociraptor server config embeds the CA, private keys and secrets.
-## Generate it out-of-band and store it in a Secret (see https://github.com/MaximeWewer/velociraptor-docker).
+## Generate it out-of-band (see https://github.com/MaximeWewer/velociraptor-docker).
+##
+## Two supported ways to provide it:
+##   1. existingSecret — point at a Secret you manage (ESO/Vault/SealedSecrets).
+##      Preferred when you have a secret manager.
+##   2. inline — let the chart render it into a Secret. Supported when you have
+##      NO secret manager; keep the secret material OUT of git (see `inline`).
+## existingSecret wins if both are set.
 config:
-  # Name of an existing Secret holding the server config. REQUIRED for production.
+  # Name of an existing Secret holding the server config.
   existingSecret: ""
   # Key within the Secret that holds the YAML config.
   secretKey: "server.config.yaml"
   # Mount path of the config file inside the container.
   mountPath: "/etc/velociraptor/server.config.yaml"
-  # Inline config — TEST ONLY. Rendered into a chart-managed Secret.
-  # Discouraged: puts CA/private keys into values. Prefer existingSecret + ESO/Vault.
+  # Inline server config — rendered into a chart-managed Secret. Use this when you
+  # have no external secret manager. The value holds the CA/private keys, so DO NOT
+  # commit it to git: keep it in a separate, gitignored overrides file and pass it at
+  # install time, e.g.
+  #   helm upgrade --install velo ./chart -f secrets.yaml         # secrets.yaml gitignored
+  #   helm upgrade --install velo ./chart --set-file config.inline=server.config.yaml
   inline: ""
   # Build downloadable client installers (MSI/DEB/RPM) — the upstream image's
   # first-boot behaviour. Injects (via the overlay merge)
@@ -122,8 +133,9 @@ gui:
     issuer: ""          # e.g. https://keycloak.example.com/realms/dfir
     clientId: "velociraptor"
     avatar: ""          # optional icon URL shown on the login button
-    # Client secret source. Prefer existingSecret (ESO/Vault); clientSecret inline
-    # is TEST-only. existingSecret wins if both are set.
+    # Client secret source. Prefer existingSecret (ESO/Vault) when available;
+    # otherwise set clientSecret inline (chart-managed Secret) — keep it out of git
+    # in a gitignored overrides file. existingSecret wins if both are set.
     existingSecret: ""
     existingSecretKey: "oauth_client_secret"
     clientSecret: ""

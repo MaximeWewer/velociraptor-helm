@@ -30,11 +30,18 @@ jobs:
           OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "owner=${OWNER_LOWER}" >> $GITHUB_OUTPUT
 
-      - name: Get chart version
+      - name: Set release version (today's date)
         id: chart
         run: |
-          VERSION=$(grep '^version:' chart/Chart.yaml | awk '{print $2}')
+          # Chart.yaml carries "<base>-DD-MM-YYYY"; the date was stamped at PR-creation
+          # time. Re-stamp it with TODAY's date so the published version reflects the
+          # actual release day, then rewrite Chart.yaml so the package matches.
+          BASE=$(grep '^version:' chart/Chart.yaml | awk '{print $2}' | sed -E 's/-[0-9]{2}-[0-9]{2}-[0-9]{4}$//')
+          DATE=$(date -u +'%d-%m-%Y')
+          VERSION="${BASE}-${DATE}"
+          sed -i "s/^version: .*/version: ${VERSION}/" chart/Chart.yaml
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Release version: ${VERSION}"
 
       - name: Login to GitHub Container Registry
         run: |

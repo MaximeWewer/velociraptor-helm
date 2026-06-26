@@ -76,6 +76,29 @@ frontend:
     loadBalancerSourceRanges: []
     externalTrafficPolicy: Local
 
+  ## SSL-passthrough Ingress for agent comms (alternative to a LoadBalancer Service).
+  ## The frontend speaks mTLS and presents its OWN cert (from the server config), so the
+  ## ingress controller must forward raw TLS (L4) WITHOUT terminating it — agents validate
+  ## the cert against the pinned CA. With service.type ClusterIP, this is how endpoints reach
+  ## the frontend through an nginx ingress instead of an LB.
+  ## PREREQUISITES:
+  ##  - the nginx ingress controller runs with `--enable-ssl-passthrough`.
+  ##  - `host` is DISTINCT from gui.ingress hosts (one host:443 can't be both L4 and L7).
+  ##  - Client.server_urls in the server config points at https://<host>/.
+  ingress:
+    enabled: false
+    className: ""
+    # Agent SNI host — must match Client.server_urls / Frontend.hostname in the config.
+    host: ""
+    path: /
+    # ImplementationSpecific lets nginx route by SNI for passthrough.
+    pathType: ImplementationSpecific
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    # Usually empty: TLS is terminated by the frontend itself, not the controller.
+    tls: []
+
   ## Multi-frontend (master/minion) horizontal scaling.
   ## Docs: https://docs.velociraptor.app/docs/deployment/server/multifrontend/
   ## PREREQUISITES (all enforced/asserted by the chart or required in your config):

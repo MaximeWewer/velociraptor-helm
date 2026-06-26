@@ -103,6 +103,8 @@ helm upgrade velo . -n dfir \
 | `frontend.apiPort` | `8001` | master gRPC API port (minion RPC) |
 | `frontend.service.type` | `LoadBalancer` | Frontend exposure (endpoint clients) |
 | `frontend.service.loadBalancerSourceRanges` | `[]` | Restrict the LB source IPs |
+| `frontend.ingress.enabled` | `false` | SSL-passthrough Ingress for agent comms (L4 TLS by SNI; needs nginx `--enable-ssl-passthrough`) |
+| `frontend.ingress.host` | `""` | Agent SNI host — must match `Client.server_urls` / `Frontend.hostname`; distinct from the GUI host |
 | `gui.service.type` | `ClusterIP` | Internal GUI |
 | `gui.ingress.enabled` | `false` | GUI Ingress (authenticated/VPN) |
 | `gui.oidc.enabled` | `false` | OIDC auth (merge via yq init-container) |
@@ -149,6 +151,14 @@ helm upgrade velo . -n dfir \
 | extraVolumes | list | `[]` |  |
 | frontend.apiPort | int | `8001` |  |
 | frontend.containerPort | int | `8000` |  |
+| frontend.ingress.annotations."nginx.ingress.kubernetes.io/backend-protocol" | string | `"HTTPS"` |  |
+| frontend.ingress.annotations."nginx.ingress.kubernetes.io/ssl-passthrough" | string | `"true"` |  |
+| frontend.ingress.className | string | `""` |  |
+| frontend.ingress.enabled | bool | `false` |  |
+| frontend.ingress.host | string | `""` |  |
+| frontend.ingress.path | string | `"/"` |  |
+| frontend.ingress.pathType | string | `"ImplementationSpecific"` |  |
+| frontend.ingress.tls | list | `[]` |  |
 | frontend.minions.affinity | object | `{}` |  |
 | frontend.minions.enabled | bool | `false` |  |
 | frontend.minions.nodeSelector | object | `{}` |  |

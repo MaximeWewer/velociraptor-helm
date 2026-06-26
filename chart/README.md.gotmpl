@@ -103,6 +103,8 @@ helm upgrade velo . -n dfir \
 | `frontend.apiPort` | `8001` | master gRPC API port (minion RPC) |
 | `frontend.service.type` | `LoadBalancer` | Frontend exposure (endpoint clients) |
 | `frontend.service.loadBalancerSourceRanges` | `[]` | Restrict the LB source IPs |
+| `frontend.ingress.enabled` | `false` | SSL-passthrough Ingress for agent comms (L4 TLS by SNI; needs nginx `--enable-ssl-passthrough`) |
+| `frontend.ingress.host` | `""` | Agent SNI host — must match `Client.server_urls` / `Frontend.hostname`; distinct from the GUI host |
 | `gui.service.type` | `ClusterIP` | Internal GUI |
 | `gui.ingress.enabled` | `false` | GUI Ingress (authenticated/VPN) |
 | `gui.oidc.enabled` | `false` | OIDC auth (merge via yq init-container) |

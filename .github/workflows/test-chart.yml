@@ -1,0 +1,94 @@
+name: Test Chart
+
+on:
+  pull_request:
+    paths:
+      - "chart/**"
+      - "ci/**"
+      - "ct.yaml"
+      - ".github/workflows/test-chart.yml"
+  push:
+    branches: [main]
+    paths:
+      - "chart/**"
+      - "ci/**"
+      - "ct.yaml"
+      - ".github/workflows/test-chart.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-chart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2
+
+      - name: ct lint (helm lint + schema + yamllint, every ci/*-values.yaml)
+        run: ct lint --config ct.yaml
+
+      - name: Render every documented mode
+        run: |
+          set -e
+          r() { echo "--- $*"; helm template v chart "$@" > /dev/null; }
+          r
+          r --set config.existingSecret=s
+          r --set config.existingSecret=s --set gui.initialAdmin.existingSecret=a
+          r --set config.inline='a: 1'
+          r --set config.bootstrap.enabled=false --set gui.initialAdmin.enabled=false
+          r --set gui.oidc.enabled=true --set gui.publicUrl=https://g/app/index.html --set gui.oidc.issuer=https://i --set gui.oidc.clientSecret=x
+          r --set frontend.minions.enabled=true --set persistence.existingClaim=rwx
+          r --set config.initializeServer=true --set customArtifacts.enabled=true
+          r --set prometheusRule.enabled=true --set serviceMonitor.enabled=true
+          # must fail
+          ! helm template v chart --set config.bootstrap.renewBeforeDays=4000 > /dev/null 2>&1
+          ! helm template v chart --set 'orgs.items[0].id=O1' > /dev/null 2>&1
+
+      - name: README is up to date (helm-docs)
+        run: |
+          curl -sSLo helm-docs.tar.gz https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_x86_64.tar.gz
+          tar -xf helm-docs.tar.gz helm-docs && rm helm-docs.tar.gz
+          ./helm-docs --chart-search-root chart && rm helm-docs
+          git diff --exit-code chart/README.md || { echo "::error::chart/README.md is stale: run helm-docs"; exit 1; }
+
+      - name: Alerting rules (promtool check + unit tests)
+        run: ./ci/test-alert-rules.sh
+
+  install:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+
+      - name: ct install (install + helm test, every ci/*-values.yaml)
+        run: ct install --config ct.yaml
+
+      - name: End-to-end lifecycle scenarios
+        run: ./ci/e2e.sh

@@ -20,6 +20,12 @@ spec:
       port: {{ .Values.frontend.containerPort }}
       targetPort: frontend
       protocol: TCP
+    {{- if .Values.serviceMonitor.enabled }}
+    - name: metrics
+      port: {{ .Values.monitoring.containerPort }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet

@@ -1,0 +1,108 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- $fullName := include "velociraptor.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $pr := .Values.prometheusRule }}
+{{- $scrape := printf "namespace=%q, service=~%q" $ns (printf "%s-(gui|minion)" $fullName) }}
+{{- $cron := printf "namespace=%q, cronjob=%q" $ns (printf "%s-pki-renew" $fullName) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullName }}
+  {{- with $pr.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+    {{- with $pr.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    {{- if .Values.serviceMonitor.enabled }}
+    # Velociraptor's own metrics (scraped by the chart's ServiceMonitor).
+    - name: {{ $fullName }}.server
+      rules:
+        - alert: VelociraptorServerDown
+          expr: max(up{ {{- $scrape -}} }) == 0 or absent(up{ {{- $scrape -}} })
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Velociraptor server {{ $ns }}/{{ $fullName }} is not scraped / down.
+            description: No Velociraptor frontend answered on its metrics port for 5 minutes.
+        - alert: VelociraptorConnectedClientsDropped
+          # Catches a fleet-wide disconnection: frontend/ingress outage, or agents rejecting
+          # a renewed server certificate (upstream client bug, see the chart README).
+          expr: |
+            sum(client_comms_current_connections{ {{- $scrape -}} })
+              < {{ $pr.clientsDrop.ratio }} * max_over_time(sum(client_comms_current_connections{ {{- $scrape -}} })[{{ $pr.clientsDrop.window }}:5m])
+            and max_over_time(sum(client_comms_current_connections{ {{- $scrape -}} })[{{ $pr.clientsDrop.window }}:5m]) >= {{ $pr.clientsDrop.minClients }}
+          for: {{ $pr.clientsDrop.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Connected Velociraptor clients dropped below {{ mulf $pr.clientsDrop.ratio 100 }}% of the {{ $pr.clientsDrop.window }} peak.
+            description: >-
+              {{ "{{" }} $value {{ "}}" }} clients connected. If the server certificates were just renewed,
+              running agents reject them until they restart (see the chart README, "Certificate renewal").
+        - alert: VelociraptorFrontendLoadShedding
+          expr: sum(rate(frontend_loadshed_count{ {{- $scrape -}} }[5m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Velociraptor frontend is rejecting client connections (load shedding).
+            description: Raise Frontend.resources (config.server.frontend) or add minions.
+    {{- end }}
+    {{- if $pr.kubeStateMetrics }}
+    # Kubernetes object state (requires kube-state-metrics).
+    - name: {{ $fullName }}.kubernetes
+      rules:
+        - alert: VelociraptorMasterNotReady
+          expr: |
+            kube_statefulset_status_replicas_ready{namespace="{{ $ns }}", statefulset="{{ $fullName }}"}
+              < kube_statefulset_replicas{namespace="{{ $ns }}", statefulset="{{ $fullName }}"}
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: Velociraptor master {{ $ns }}/{{ $fullName }} is not ready.
+            description: >-
+              If a pod of a previous revision never became Ready, the StatefulSet does not
+              replace it: fix the values, then delete the pod.
+        {{- if eq (include "velociraptor.pkiCronEnabled" .) "true" }}
+        - alert: VelociraptorCertificateCheckFailing
+          # The CronJob fails when the server certificates cannot be renewed (bootstrap) or
+          # expire soon (existingSecret / inline), or when the CA expires within caWarnDays.
+          expr: |
+            (max(kube_cronjob_status_last_schedule_time{ {{- $cron -}} }) - max(kube_cronjob_status_last_successful_time{ {{- $cron -}} })) > 3600
+            or (time() - max(kube_cronjob_status_last_successful_time{ {{- $cron -}} })) > 172800
+            or (absent(kube_cronjob_status_last_successful_time{ {{- $cron -}} }) and on() (time() - max(kube_cronjob_created{ {{- $cron -}} })) > 172800)
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: Velociraptor certificate check {{ $ns }}/{{ $fullName }}-pki-renew is failing.
+            description: >-
+              Read the logs of the last {{ $fullName }}-pki-renew Job: server certificates or the
+              CA expire soon, or the renewal failed.
+        {{- end }}
+        {{- if eq (include "velociraptor.configSource" .) "bootstrap" }}
+        - alert: VelociraptorIdentitySecretMissing
+          expr: absent(kube_secret_info{namespace="{{ $ns }}", secret="{{ include "velociraptor.bootstrapSecretName" . }}"})
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The Velociraptor identity Secret {{ $ns }}/{{ include "velociraptor.bootstrapSecretName" . }} is gone.
+            description: >-
+              It holds the CA every agent pins. Restore it from backup BEFORE the next
+              install/upgrade: otherwise a new CA is generated and every agent is orphaned.
+        {{- end }}
+    {{- end }}
+    {{- with $pr.extraRules }}
+    - name: {{ $fullName }}.extra
+      rules:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- end }}

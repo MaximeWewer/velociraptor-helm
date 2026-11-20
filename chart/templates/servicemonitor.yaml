@@ -12,10 +12,15 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
+  # Master (through the GUI Service) and minions (headless Service): with multi-frontend,
+  # clients are spread over all frontends.
   selector:
     matchLabels:
       {{- include "velociraptor.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: gui
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [gui, minion]
   endpoints:
     - port: {{ .Values.serviceMonitor.port }}
       path: {{ .Values.serviceMonitor.path }}

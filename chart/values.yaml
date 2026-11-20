@@ -464,11 +464,33 @@ serviceMonitor:
   interval: 30s
   scrapeTimeout: 10s
   labels: {}
-  # Scrapes the monitoring port (8003). Requires Monitoring.bind_address: 0.0.0.0
-  # in the server config (see monitoring: above).
+  # Scrapes the monitoring port (8003) of the master and the minions. Monitoring.bind_address
+  # is set to 0.0.0.0 when the chart manages the config (see monitoring: above).
   port: metrics
   path: /metrics
   scheme: http
+
+## Alerting rules (Prometheus Operator PrometheusRule).
+## - server group (needs serviceMonitor.enabled): server down, fleet-wide drop of connected
+##   clients (e.g. agents rejecting renewed certificates), frontend load shedding;
+## - kubernetes group (needs kube-state-metrics): master not ready, certificate CronJob
+##   failing (expiry / renewal failure / CA expiry), identity Secret missing.
+prometheusRule:
+  enabled: false
+  # Namespace of the PrometheusRule (default: release namespace).
+  namespace: ""
+  # Extra labels, e.g. the ruleSelector of your Prometheus (release: kube-prometheus-stack).
+  labels: {}
+  kubeStateMetrics: true
+  clientsDrop:
+    # Alert when connected clients fall below ratio x the peak of the window...
+    ratio: 0.5
+    window: 6h
+    # ... only if that peak had at least minClients (avoids noise on tiny fleets).
+    minClients: 10
+    for: 15m
+  # Additional rules (standard Prometheus rule objects) appended in their own group.
+  extraRules: []
 
 ## Orgs (multi-tenancy). Each org has its own clients, hunts, users and client config
 ## (own nonce), on the same server. Declarative: a native sidecar of the master (needs

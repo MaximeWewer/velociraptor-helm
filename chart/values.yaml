@@ -99,6 +99,80 @@ config:
         memory: 128Mi
       limits:
         memory: 512Mi
+
+  # Chart-managed operational config (split secrets / settings).
+  # When true, the chart RENDERS the operational parts of the server config — ports,
+  # bind addresses, hostnames, URLs, datastore, logging, monitoring, authenticator
+  # type — from chart values and deep-merges them (via the yq overlay) onto your base
+  # config. Your base (existingSecret/inline) then only needs the SECRET material:
+  # CA/Frontend/GUI private keys + certificates, Client.Crypto, nonce, obfuscation_nonce.
+  # Generate it once with `velociraptor config generate` and never hand-edit
+  # ports/URLs/paths again — the chart aligns them to the k8s deployment.
+  # Derived from existing values: gui.containerPort, gui.publicUrl, gui.oidc.*,
+  # frontend.containerPort, frontend.apiPort, frontend.ingress.host, frontend.minions,
+  # persistence.mountPath, monitoring.containerPort, serviceMonitor.enabled.
+  manageServerConfig: false
+  server:
+    ## Precedence (low -> high): raw section maps  <  chart-derived fields  <  extraConfig.
+    ## Chart-derived (auto, override only via extraConfig): GUI/Frontend/API/Monitoring
+    ## bind_address + bind_port, Frontend.hostname, API.hostname/pinned_gw_name (multi-
+    ## frontend), Client.server_urls, Datastore.location/filestore_directory.
+
+    # Client.server_urls (agent-facing). Empty -> derived from frontend.ingress.host
+    # as ["https://<host>/"]. Set explicitly if agents reach the frontend elsewhere.
+    clientServerUrls: []
+    # Datastore.implementation. Single-frontend: FileBaseDataStore. For master/minion,
+    # set datastore.master_implementation / minion_implementation below.
+    datastoreImplementation: "FileBaseDataStore"
+    logging:
+      separateLogsPerComponent: true
+      # Empty -> leave the base/default. Otherwise Logging.output_directory.
+      outputDirectory: ""
+      rotationTime: 604800     # 7d
+      maxAge: 31536000         # 365d
+      # Remote syslog (empty -> omit).
+      remoteSyslogServer: ""   # e.g. "siem.example:514"
+      remoteSyslogProtocol: ""  # tcp | udp
+      remoteSyslogComponents: []
+
+    ## Raw per-section passthrough — keys use the UPSTREAM config field names verbatim
+    ## (see https://raw.githubusercontent.com/Velocidex/velociraptor/refs/heads/master/docs/references/server.config.yaml).
+    ## Anything here is merged in; chart-derived fields above still win. Put NO secrets here.
+    # Client tuning, e.g. { max_poll: 60, max_upload_size: 5242880, use_self_signed_ssl: true,
+    #   pinned_server_name: VelociraptorServer, proxy: "", local_buffer: { disk_size: 1073741824 } }
+    client: {}
+    # API extras, e.g. { bind_scheme: tcp }
+    api: {}
+    # GUI extras, e.g. { base_path: /, use_plain_http: false, allowed_cidr: [...],
+    #   trusted_origins: [...], links: [...], reverse_proxy: [...] }
+    gui: {}
+    # Frontend extras, e.g. { use_plain_http: false, require_client_certificates: false,
+    #   do_not_compress_artifacts: true, GRPC_pool_max_size: 100, default_client_monitoring_artifacts: [...],
+    #   resources: { expected_clients: 30000, connections_per_second: 100, max_upload_size: 104857600 } }
+    frontend: {}
+    # Datastore extras, e.g. { master_implementation: MemcacheFileDataStore,
+    #   minion_implementation: RemoteFileDataStore, compression: zlib, max_object_size: 4194304 }
+    datastore: {}
+    # Monitoring extras (bind_address/bind_port are chart-derived).
+    monitoring: {}
+    # defaults.* — e.g. { hunt_expiry_hours: 168, backup_period_seconds: 86400,
+    #   notebook_cell_timeout_min: 10, export_concurrency: 10, disable_unicode_usernames: false }
+    defaults: {}
+    # security.* — e.g. { certificate_validity_days: 365, denied_plugins: [...], vql_must_use_secrets: false }
+    security: {}
+    # Minion.* — notebook worker overrides for multi-frontend.
+    minion: {}
+
+    ## Top-level scalars (empty/null -> omit).
+    serverType: ""             # server_type, e.g. "linux"
+    autocertDomain: ""         # autocert_domain (Let's Encrypt on :443 for frontend+GUI)
+    autocertCertCache: ""      # autocert_cert_cache (writable dir/datastore path)
+    lockdown: null             # true/false -> lockdown (read-only server mode)
+    debugMode: null            # true/false -> debug_mode
+
+    # Raw YAML deep-merged LAST onto the rendered overlay (overrides EVERYTHING above).
+    extraConfig: {}
+
   # Build downloadable client installers (MSI/DEB/RPM) — the upstream image's
   # first-boot behaviour. Injects (via the overlay merge)
   # `Frontend.initial_server_artifacts: [Container.InitializeServer]` so the
@@ -164,16 +238,15 @@ frontend:
   ## PREREQUISITES (all enforced/asserted by the chart or required in your config):
   ##  - persistence.existingClaim set to a ReadWriteMany volume (NFS/EFS) — master
   ##    and all minions share one filestore. (chart fails the render otherwise.)
-  ##  - The server config in your Secret MUST contain:
-  ##      Datastore.master_implementation: MemcacheFileDataStore
-  ##      Datastore.minion_implementation:  RemoteFileDataStore
-  ##      API.bind_address: 0.0.0.0
-  ##      API.hostname: <release>-api.<namespace>.svc   (the master API Service)
-  ##      API.pinned_gw_name: GRPC_GW   (minions pin the master gRPC cert by name,
-  ##        not DNS; without it the minion-master TLS handshake fails)
-  ##      ExtraFrontends: one entry per minion, hostname "<release>-minion-0" .. "-N",
-  ##        each with bind_address 0.0.0.0 / bind_port 8000. The chart starts each
-  ##        minion with `--node <hostname>-<bind_port>` (hyphen, e.g. ...-minion-0-8000).
+  ##  - API.bind_address 0.0.0.0, API.hostname <fullname>-api.<namespace>.svc and
+  ##    API.pinned_gw_name GRPC_GW are DERIVED when the chart manages the config
+  ##    (bootstrap / manageServerConfig); otherwise your config must set them.
+  ##  - Set in config.server (or your config):
+  ##      datastore: { master_implementation: MemcacheFileDataStore,
+  ##                   minion_implementation: RemoteFileDataStore }
+  ##      extraConfig.ExtraFrontends: one entry per minion, hostname "<fullname>-minion-0"
+  ##        .. "-N", bind_address 0.0.0.0 / bind_port 8000. The chart starts each minion
+  ##        with `--node <hostname>-<bind_port>` (hyphen, e.g. ...-minion-0-8000).
   ##  - Client.server_urls should point at the frontend Service (LB fronts all frontends).
   ## NOTE: Velociraptor 0.76.6 has an upstream nil-pointer panic in the minion's
   ## RemoteFileDataStore (datastore/remote.go ListChildren), tracked around
@@ -198,6 +271,8 @@ gui:
   # The OAuth callback Velociraptor derives (register it in the IdP) is:
   #   <scheme>://<host>/auth/oidc/<gui.oidc.name>/callback
   publicUrl: ""
+  # GUI.base_path — served sub-path behind a reverse proxy (only with manageServerConfig).
+  basePath: ""
   ## Initial administrator. An init container runs `velociraptor user add --role
   ## administrator <username> <password>` on every master start, so the account always
   ## exists and its password always matches the Secret (the Secret is the source of truth:
@@ -252,9 +327,9 @@ gui:
     tls: []
 
 ## Prometheus metrics endpoint (Velociraptor Monitoring service).
-## NOTE: the server config defaults to `Monitoring.bind_address: 127.0.0.1`,
-## which is NOT reachable from outside the pod. To scrape, the config in your
-## Secret MUST set `Monitoring.bind_address: 0.0.0.0` (and bind_port below).
+## Monitoring.bind_address defaults to 127.0.0.1 (not scrapable). When the chart manages
+## the config (bootstrap / manageServerConfig) it is set to 0.0.0.0 with
+## serviceMonitor.enabled; otherwise your config must set it (and bind_port below).
 monitoring:
   containerPort: 8003
 

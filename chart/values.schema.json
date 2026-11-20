@@ -48,6 +48,42 @@
             "resources": { "type": "object" }
           }
         },
+        "manageServerConfig": { "type": "boolean",
+          "description": "Render operational config from values and merge onto the base (secrets)." },
+        "server": {
+          "type": "object",
+          "properties": {
+            "clientServerUrls": { "type": "array", "items": { "type": "string" } },
+            "datastoreImplementation": { "type": "string" },
+            "logging": {
+              "type": "object",
+              "properties": {
+                "separateLogsPerComponent": { "type": "boolean" },
+                "outputDirectory": { "type": "string" },
+                "rotationTime": { "type": "integer" },
+                "maxAge": { "type": "integer" },
+                "remoteSyslogServer": { "type": "string" },
+                "remoteSyslogProtocol": { "type": "string" },
+                "remoteSyslogComponents": { "type": "array" }
+              }
+            },
+            "client": { "type": "object" },
+            "api": { "type": "object" },
+            "gui": { "type": "object" },
+            "frontend": { "type": "object" },
+            "datastore": { "type": "object" },
+            "monitoring": { "type": "object" },
+            "defaults": { "type": "object" },
+            "security": { "type": "object" },
+            "minion": { "type": "object" },
+            "serverType": { "type": "string" },
+            "autocertDomain": { "type": "string" },
+            "autocertCertCache": { "type": "string" },
+            "lockdown": { "type": ["boolean", "null"] },
+            "debugMode": { "type": ["boolean", "null"] },
+            "extraConfig": { "type": "object" }
+          }
+        },
         "initializeServer": { "type": "boolean" },
         "overlay": {
           "type": "object",
@@ -100,6 +136,7 @@
       "properties": {
         "containerPort": { "type": "integer" },
         "publicUrl": { "type": "string" },
+        "basePath": { "type": "string" },
         "initialAdmin": {
           "type": "object",
           "properties": {

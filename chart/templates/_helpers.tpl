@@ -232,9 +232,141 @@ volumes:
 {{- end }}
 {{- end }}
 
+{{/* "true" when the chart owns the operational config. Forced in bootstrap mode: a raw
+     `config generate` binds the GUI to 127.0.0.1, stores data under /var/tmp (off the PVC,
+     read-only rootfs) and points agents at localhost — unusable without the overlay. */}}
+{{- define "velociraptor.manageServerConfig" -}}
+{{- if or .Values.config.manageServerConfig (eq (include "velociraptor.configSource" .) "bootstrap") -}}true{{- end -}}
+{{- end }}
+
 {{/* "true" when a config overlay (init-container merge) is needed. */}}
 {{- define "velociraptor.overlayEnabled" -}}
-{{- if or .Values.gui.oidc.enabled .Values.config.initializeServer .Values.customArtifacts.enabled -}}true{{- end -}}
+{{- if or .Values.gui.oidc.enabled .Values.config.initializeServer .Values.customArtifacts.enabled (eq (include "velociraptor.manageServerConfig" .) "true") -}}true{{- end -}}
+{{- end }}
+
+{{/* Client.server_urls as a JSON array, first match wins:
+     config.server.clientServerUrls > frontend ingress host (443, SSL passthrough) >
+     LoadBalancer IP > in-cluster Service DNS (only reachable from inside the cluster). */}}
+{{- define "velociraptor.clientServerUrls" -}}
+{{- $fe := .Values.frontend -}}
+{{- if .Values.config.server.clientServerUrls -}}
+{{- toJson .Values.config.server.clientServerUrls -}}
+{{- else if and $fe.ingress.enabled $fe.ingress.host -}}
+{{- list (printf "https://%s/" $fe.ingress.host) | toJson -}}
+{{- else if and (eq $fe.service.type "LoadBalancer") $fe.service.loadBalancerIP -}}
+{{- list (printf "https://%s:%v/" $fe.service.loadBalancerIP $fe.service.port) | toJson -}}
+{{- else -}}
+{{- list (printf "https://%s-frontend.%s.svc:%v/" (include "velociraptor.fullname" .) .Release.Namespace $fe.service.port) | toJson -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Operational config overlay (YAML), deep-merged onto the base config (secrets) by the
+config-merge init container. Built as an accumulated dict so each top-level key appears
+once across all enabled features (oidc / initializeServer / customArtifacts / manageServerConfig).
+- manageServerConfig=false: legacy targeted overlay (oidc + init + artifacts only).
+- manageServerConfig=true:  chart owns the operational config — ports, bind addresses,
+  hostnames, URLs, datastore, logging, monitoring, authenticator type — derived from chart
+  values; secrets stay in the base. config.server.extraConfig is deep-merged last (wins).
+*/}}
+{{- define "velociraptor.configOverlay" -}}
+{{- $o := dict -}}
+{{- $manage := eq (include "velociraptor.manageServerConfig" .) "true" -}}
+{{- $oidc := .Values.gui.oidc.enabled -}}
+{{- $srv := .Values.config.server -}}
+{{/*
+LAYER 1 (lowest precedence) — raw per-section passthrough maps, keyed with the upstream
+config field names. Lets any operational field be set verbatim; chart-derived fields
+(layer 2) and extraConfig (layer 3) override these.
+*/}}
+{{- if $manage -}}
+  {{- $rawSections := dict "client" "Client" "api" "API" "gui" "GUI" "frontend" "Frontend" "datastore" "Datastore" "monitoring" "Monitoring" "defaults" "defaults" "security" "security" "minion" "Minion" -}}
+  {{- range $vk, $ck := $rawSections -}}
+    {{- with index $srv $vk }}{{- $o = mergeOverwrite $o (dict $ck (deepCopy .)) -}}{{- end -}}
+  {{- end -}}
+  {{/* Top-level scalars */}}
+  {{- with $srv.serverType }}{{- $_ := set $o "server_type" . -}}{{- end -}}
+  {{- with $srv.autocertDomain }}{{- $_ := set $o "autocert_domain" . -}}{{- end -}}
+  {{- with $srv.autocertCertCache }}{{- $_ := set $o "autocert_cert_cache" . -}}{{- end -}}
+  {{- if kindIs "bool" $srv.lockdown }}{{- $_ := set $o "lockdown" $srv.lockdown -}}{{- end -}}
+  {{- if kindIs "bool" $srv.debugMode }}{{- $_ := set $o "debug_mode" $srv.debugMode -}}{{- end -}}
+{{- end -}}
+{{/*
+LAYER 2 — chart-derived operational fields. Built into $f then deep-merged so they win
+over the raw maps. GUI authenticator / Frontend artifacts apply in legacy mode too.
+*/}}
+{{- $f := dict -}}
+{{/* GUI */}}
+{{- if or $oidc $manage -}}
+  {{- $gui := dict -}}
+  {{- if $manage -}}
+    {{- $_ := set $gui "bind_address" "0.0.0.0" -}}
+    {{- $_ := set $gui "bind_port" (.Values.gui.containerPort | int) -}}
+    {{- with .Values.gui.basePath }}{{- $_ := set $gui "base_path" . -}}{{- end -}}
+  {{- end -}}
+  {{- if $oidc -}}
+    {{- $_ := set $gui "public_url" (required "gui.publicUrl is required when gui.oidc.enabled (OIDC redirects)" .Values.gui.publicUrl) -}}
+  {{- else -}}
+    {{- with .Values.gui.publicUrl }}{{- $_ := set $gui "public_url" . -}}{{- end -}}
+  {{- end -}}
+  {{- $auth := dict "type" (ternary "oidc" "Basic" $oidc) -}}
+  {{- if $oidc -}}
+    {{- $_ := set $auth "oidc_issuer" (required "gui.oidc.issuer is required when gui.oidc.enabled" .Values.gui.oidc.issuer) -}}
+    {{- $_ := set $auth "oidc_name" .Values.gui.oidc.name -}}
+    {{- $_ := set $auth "oauth_client_id" .Values.gui.oidc.clientId -}}
+    {{- with .Values.gui.oidc.avatar }}{{- $_ := set $auth "avatar" . -}}{{- end -}}
+  {{- end -}}
+  {{- $_ := set $gui "authenticator" $auth -}}
+  {{- $_ := set $f "GUI" $gui -}}
+{{- end -}}
+{{/* Frontend */}}
+{{- if or .Values.config.initializeServer $manage -}}
+  {{- $fe := dict -}}
+  {{- if $manage -}}
+    {{- $_ := set $fe "bind_address" "0.0.0.0" -}}
+    {{- $_ := set $fe "bind_port" (.Values.frontend.containerPort | int) -}}
+    {{- with .Values.frontend.ingress.host }}{{- $_ := set $fe "hostname" . -}}{{- end -}}
+  {{- end -}}
+  {{- if .Values.config.initializeServer -}}
+    {{- $_ := set $fe "initial_server_artifacts" (list "Container.InitializeServer") -}}
+  {{- end -}}
+  {{- $_ := set $f "Frontend" $fe -}}
+{{- end -}}
+{{- if $manage -}}
+  {{/* API */}}
+  {{- $api := dict "bind_address" (ternary "0.0.0.0" "127.0.0.1" .Values.frontend.minions.enabled) "bind_port" (.Values.frontend.apiPort | int) -}}
+  {{- if .Values.frontend.minions.enabled -}}
+    {{- $_ := set $api "hostname" (printf "%s-api.%s.svc" (include "velociraptor.fullname" .) .Release.Namespace) -}}
+    {{- $_ := set $api "pinned_gw_name" "GRPC_GW" -}}
+  {{- end -}}
+  {{- $_ := set $f "API" $api -}}
+  {{/* Client.server_urls — the address agents dial (see velociraptor.clientServerUrls) */}}
+  {{- $_ := set $f "Client" (dict "server_urls" (include "velociraptor.clientServerUrls" . | fromJsonArray)) -}}
+  {{/* Datastore */}}
+  {{- $_ := set $f "Datastore" (dict "implementation" $srv.datastoreImplementation "location" .Values.persistence.mountPath "filestore_directory" .Values.persistence.mountPath) -}}
+  {{/* Monitoring — 0.0.0.0 so Prometheus can scrape when serviceMonitor is on */}}
+  {{- $_ := set $f "Monitoring" (dict "bind_address" (ternary "0.0.0.0" "127.0.0.1" .Values.serviceMonitor.enabled) "bind_port" (.Values.monitoring.containerPort | int)) -}}
+  {{/* Logging */}}
+  {{- $log := dict "separate_logs_per_component" $srv.logging.separateLogsPerComponent "rotation_time" ($srv.logging.rotationTime | int) "max_age" ($srv.logging.maxAge | int) -}}
+  {{- with $srv.logging.outputDirectory }}{{- $_ := set $log "output_directory" . -}}{{- end -}}
+  {{- with $srv.logging.remoteSyslogServer }}{{- $_ := set $log "remote_syslog_server" . -}}{{- end -}}
+  {{- with $srv.logging.remoteSyslogProtocol }}{{- $_ := set $log "remote_syslog_protocol" . -}}{{- end -}}
+  {{- with $srv.logging.remoteSyslogComponents }}{{- $_ := set $log "remote_syslog_components" . -}}{{- end -}}
+  {{- $_ := set $f "Logging" $log -}}
+{{- end -}}
+{{/* defaults — artifact search dirs: chart-shipped (initializeServer) + custom (both modes) */}}
+{{- $dirs := list -}}
+{{- if .Values.config.initializeServer }}{{ $dirs = append $dirs "/chart-artifacts" }}{{ end -}}
+{{- if .Values.customArtifacts.enabled }}{{ $dirs = append $dirs .Values.customArtifacts.path }}{{ end -}}
+{{- with $dirs -}}
+  {{- $_ := set $f "defaults" (dict "artifact_definitions_directories" .) -}}
+{{- end -}}
+{{- $o = mergeOverwrite $o $f -}}
+{{/* LAYER 3 (highest) — raw escape hatch, overrides everything above */}}
+{{- if $manage -}}
+  {{- with $srv.extraConfig }}{{- $o = mergeOverwrite $o (deepCopy .) -}}{{- end -}}
+{{- end -}}
+{{- toYaml $o -}}
 {{- end }}
 
 {{/* Secret + key holding the OIDC client secret. */}}

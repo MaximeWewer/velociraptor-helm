@@ -40,13 +40,37 @@ jobs:
           echo "core=${CORE}" >> $GITHUB_OUTPUT
           echo "velociraptor-docker pins: ${VELO_VERSION} -> ${CORE}"
 
+          # The Dockerfile is bumped before its image is built/pushed: only move the chart
+          # to a tag that already exists on GHCR (anonymous pull token, public package).
+          TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:maximewewer/velociraptor:pull" | jq -r .token)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json" \
+            "https://ghcr.io/v2/maximewewer/velociraptor/manifests/${CORE}-distroless")
+          if [ "$CODE" != "200" ]; then
+            echo "Image ghcr.io/maximewewer/velociraptor:${CORE}-distroless not published yet (HTTP ${CODE}): skipping." >&2
+            echo "core=" >> $GITHUB_OUTPUT
+          fi
+
+          # Never downgrade: the chart may already be ahead of velociraptor-docker's pin.
+          CURRENT=$(grep '^appVersion:' chart/Chart.yaml | awk '{print $2}' | tr -d '"')
+          if [ "$CODE" = "200" ] && [ "$(printf '%s\n%s\n' "$CURRENT" "$CORE" | sort -V | tail -1)" != "$CORE" ]; then
+            echo "Chart already on ${CURRENT} (>= ${CORE}): skipping." >&2
+            echo "core=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop when the image is not published yet
+        if: steps.velo.outputs.core == ''
+        run: echo "Nothing to do this week."
+
       - name: Update Chart.yaml
+        if: steps.velo.outputs.core != ''
         run: |
           CORE="${{ steps.velo.outputs.core }}"
           # appVersion tracks the velociraptor release
           sed -i "s/^appVersion: .*/appVersion: \"${CORE}\"/" chart/Chart.yaml
 
       - name: Update values.yaml
+        if: steps.velo.outputs.core != ''
         run: |
           CORE="${{ steps.velo.outputs.core }}"
           # Update the velociraptor image tag (matched via its repository line).
@@ -54,6 +78,7 @@ jobs:
           sed -i "\#repository: maximewewer/velociraptor#{n;s/tag: .*/tag: \"${CORE}-distroless\"/}" chart/values.yaml
 
       - name: Check for changes
+        if: steps.velo.outputs.core != ''
         id: changes
         run: |
           if git diff --quiet; then

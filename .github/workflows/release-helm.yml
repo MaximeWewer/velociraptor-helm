@@ -28,7 +28,7 @@ jobs:
         id: lowercase
         run: |
           OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "owner=${OWNER_LOWER}" >> $GITHUB_OUTPUT
+          echo "owner=${OWNER_LOWER}" >> "$GITHUB_OUTPUT"
 
       - name: Set release version (today's date)
         id: chart
@@ -40,7 +40,7 @@ jobs:
           DATE=$(date -u +'%d-%m-%Y')
           VERSION="${BASE}-${DATE}"
           sed -i "s/^version: .*/version: ${VERSION}/" chart/Chart.yaml
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Release version: ${VERSION}"
 
       - name: Login to GitHub Container Registry

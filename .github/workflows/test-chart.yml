@@ -54,9 +54,10 @@ jobs:
           r --set frontend.minions.enabled=true --set persistence.existingClaim=rwx
           r --set config.initializeServer=true --set customArtifacts.enabled=true
           r --set prometheusRule.enabled=true --set serviceMonitor.enabled=true
-          # must fail
-          ! helm template v chart --set config.bootstrap.renewBeforeDays=4000 > /dev/null 2>&1
-          ! helm template v chart --set 'orgs.items[0].id=O1' > /dev/null 2>&1
+          # must fail (`! cmd` would not trip `set -e`)
+          must_fail() { if helm template v chart "$@" > /dev/null 2>&1; then echo "::error::render should have failed: $*"; exit 1; fi; }
+          must_fail --set config.bootstrap.renewBeforeDays=4000
+          must_fail --set 'orgs.items[0].id=O1'
 
       - name: README is up to date (helm-docs)
         run: |

@@ -37,7 +37,7 @@ jobs:
           fi
           # Strip leading 'v' -> semver base used by appVersion and the image tag.
           CORE="${VELO_VERSION#v}"
-          echo "core=${CORE}" >> $GITHUB_OUTPUT
+          echo "core=${CORE}" >> "$GITHUB_OUTPUT"
           echo "velociraptor-docker pins: ${VELO_VERSION} -> ${CORE}"
 
           # The Dockerfile is bumped before its image is built/pushed: only move the chart
@@ -48,14 +48,14 @@ jobs:
             "https://ghcr.io/v2/maximewewer/velociraptor/manifests/${CORE}-distroless")
           if [ "$CODE" != "200" ]; then
             echo "Image ghcr.io/maximewewer/velociraptor:${CORE}-distroless not published yet (HTTP ${CODE}): skipping." >&2
-            echo "core=" >> $GITHUB_OUTPUT
+            echo "core=" >> "$GITHUB_OUTPUT"
           fi
 
           # Never downgrade: the chart may already be ahead of velociraptor-docker's pin.
           CURRENT=$(grep '^appVersion:' chart/Chart.yaml | awk '{print $2}' | tr -d '"')
           if [ "$CODE" = "200" ] && [ "$(printf '%s\n%s\n' "$CURRENT" "$CORE" | sort -V | tail -1)" != "$CORE" ]; then
             echo "Chart already on ${CURRENT} (>= ${CORE}): skipping." >&2
-            echo "core=" >> $GITHUB_OUTPUT
+            echo "core=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Stop when the image is not published yet
@@ -82,10 +82,10 @@ jobs:
         id: changes
         run: |
           if git diff --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No changes detected"
           else
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Changes detected:"
             git diff --stat
           fi
@@ -98,7 +98,7 @@ jobs:
           DATE=$(date -u +'%d-%m-%Y')
           NEW_VERSION="${BASE}-${DATE}"
           sed -i "s/^version: .*/version: ${NEW_VERSION}/" chart/Chart.yaml
-          echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Chart version set to: ${NEW_VERSION}"
 
       - name: Regenerate chart README

@@ -6,7 +6,7 @@ fullnameOverride: ""
 
 image:
   registry: "ghcr.io"
-  # Hardened distroless/rootless rebuild — built & published from
+  # Hardened distroless/rootless rebuild - built & published from
   # https://github.com/MaximeWewer/velociraptor-docker
   repository: maximewewer/velociraptor
   tag: "0.77.3-distroless"
@@ -21,9 +21,9 @@ imagePullSecrets: []
 ## Losing or regenerating it orphans every agent, so its lifecycle matters.
 ##
 ## Three sources, first match wins:
-##   1. existingSecret — a Secret you manage (ESO/Vault/SealedSecrets).
-##   2. inline         — the chart renders it into a Secret (keep it out of git).
-##   3. bootstrap      — DEFAULT. A Job generates the identity in-cluster on first install,
+##   1. existingSecret - a Secret you manage (ESO/Vault/SealedSecrets).
+##   2. inline         - the chart renders it into a Secret (keep it out of git).
+##   3. bootstrap      - DEFAULT. A Job generates the identity in-cluster on first install,
 ##                       stores it in a Secret the chart never renders (never regenerated,
 ##                       never pruned by Helm/Argo, survives uninstall) and renews the
 ##                       server certificates before they expire. Nothing to generate by hand.
@@ -34,7 +34,7 @@ config:
   secretKey: "server.config.yaml"
   # Mount path of the config file inside the container.
   mountPath: "/etc/velociraptor/server.config.yaml"
-  # Inline server config — rendered into a chart-managed Secret. Use this when you
+  # Inline server config - rendered into a chart-managed Secret. Use this when you
   # have no external secret manager. The value holds the CA/private keys, so DO NOT
   # commit it to git: keep it in a separate, gitignored overrides file and pass it at
   # install time, e.g.
@@ -44,13 +44,13 @@ config:
 
   ## In-cluster identity bootstrap & certificate renewal (used when neither existingSecret
   ## nor inline is set). Implemented in VQL (chart/files/pki.vql) and run by the chart's
-  ## own Velociraptor image — no shell, no extra image.
+  ## own Velociraptor image - no shell, no extra image.
   ##  - pre-install/pre-upgrade hook Job (Argo: PreSync): create the Secret if missing
   ##    (import it from `importFrom` if that Secret exists, else `config generate`);
   ##    renew the Frontend/GUI certificates if they expire within renewBeforeDays.
   ##  - CronJob: the same check on a schedule, so certificates are renewed even when
   ##    nobody upgrades the release for a year.
-  ## Renewal = `config reissue_certs`: SAME CA, same private keys, same nonces — agents
+  ## Renewal = `config reissue_certs`: SAME CA, same private keys, same nonces - agents
   ## don't notice. The CA itself is valid 10 years and is never rotated automatically.
   bootstrap:
     enabled: true
@@ -78,7 +78,7 @@ config:
     # Renew when a server certificate expires within this many days.
     renewBeforeDays: 30
     # After a renewal, delete the server pods (master + minions) so they reload the
-    # certificates — the StatefulSets recreate them. Running pods only read them at start.
+    # certificates - the StatefulSets recreate them. Running pods only read them at start.
     restartOnRenew: true
     # The CronJob fails (-> alert) when the CA expires within this many days.
     caWarnDays: 180
@@ -101,13 +101,13 @@ config:
         memory: 512Mi
 
   # Chart-managed operational config (split secrets / settings).
-  # When true, the chart RENDERS the operational parts of the server config — ports,
+  # When true, the chart RENDERS the operational parts of the server config - ports,
   # bind addresses, hostnames, URLs, datastore, logging, monitoring, authenticator
-  # type — from chart values and deep-merges them (via the yq overlay) onto your base
+  # type - from chart values and deep-merges them (via the yq overlay) onto your base
   # config. Your base (existingSecret/inline) then only needs the SECRET material:
   # CA/Frontend/GUI private keys + certificates, Client.Crypto, nonce, obfuscation_nonce.
   # Generate it once with `velociraptor config generate` and never hand-edit
-  # ports/URLs/paths again — the chart aligns them to the k8s deployment.
+  # ports/URLs/paths again - the chart aligns them to the k8s deployment.
   # Derived from existing values: gui.containerPort, gui.publicUrl, gui.oidc.*,
   # frontend.containerPort, frontend.apiPort, frontend.ingress.host, frontend.minions,
   # persistence.mountPath, monitoring.containerPort, serviceMonitor.enabled.
@@ -135,7 +135,7 @@ config:
       remoteSyslogProtocol: ""  # tcp | udp
       remoteSyslogComponents: []
 
-    ## Raw per-section passthrough — keys use the UPSTREAM config field names verbatim
+    ## Raw per-section passthrough - keys use the UPSTREAM config field names verbatim
     ## (see https://raw.githubusercontent.com/Velocidex/velociraptor/refs/heads/master/docs/references/server.config.yaml).
     ## Anything here is merged in; chart-derived fields above still win. Put NO secrets here.
     # Client tuning, e.g. { max_poll: 60, max_upload_size: 5242880, use_self_signed_ssl: true,
@@ -155,12 +155,12 @@ config:
     datastore: {}
     # Monitoring extras (bind_address/bind_port are chart-derived).
     monitoring: {}
-    # defaults.* — e.g. { hunt_expiry_hours: 168, backup_period_seconds: 86400,
+    # defaults.* - e.g. { hunt_expiry_hours: 168, backup_period_seconds: 86400,
     #   notebook_cell_timeout_min: 10, export_concurrency: 10, disable_unicode_usernames: false }
     defaults: {}
-    # security.* — e.g. { certificate_validity_days: 365, denied_plugins: [...], vql_must_use_secrets: false }
+    # security.* - e.g. { certificate_validity_days: 365, denied_plugins: [...], vql_must_use_secrets: false }
     security: {}
-    # Minion.* — notebook worker overrides for multi-frontend.
+    # Minion.* - notebook worker overrides for multi-frontend.
     minion: {}
 
     ## Top-level scalars (empty/null -> omit).
@@ -173,7 +173,7 @@ config:
     # Raw YAML deep-merged LAST onto the rendered overlay (overrides EVERYTHING above).
     extraConfig: {}
 
-  # Build downloadable client installers (MSI/DEB/RPM) — the official Docker image's
+  # Build downloadable client installers (MSI/DEB/RPM) - the official Docker image's
   # first-boot behaviour. Injects `Frontend.initial_server_artifacts:
   # [Container.InitializeServer]` and ships that artifact itself (the hardened image does
   # not contain it: referencing it without the chart's copy crashes the server with
@@ -214,7 +214,7 @@ frontend:
 
   ## SSL-passthrough Ingress for agent comms (alternative to a LoadBalancer Service).
   ## The frontend speaks mTLS and presents its OWN cert (from the server config), so the
-  ## ingress controller must forward raw TLS (L4) WITHOUT terminating it — agents validate
+  ## ingress controller must forward raw TLS (L4) WITHOUT terminating it - agents validate
   ## the cert against the pinned CA. With service.type ClusterIP, this is how endpoints reach
   ## the frontend through an nginx ingress instead of an LB.
   ## PREREQUISITES:
@@ -224,7 +224,7 @@ frontend:
   ingress:
     enabled: false
     className: ""
-    # Agent SNI host — must match Client.server_urls / Frontend.hostname in the config.
+    # Agent SNI host - must match Client.server_urls / Frontend.hostname in the config.
     host: ""
     path: /
     # ImplementationSpecific lets nginx route by SNI for passthrough.
@@ -238,7 +238,7 @@ frontend:
   ## Multi-frontend (master/minion) horizontal scaling.
   ## Docs: https://docs.velociraptor.app/docs/deployment/server/multifrontend/
   ## PREREQUISITES (all enforced/asserted by the chart or required in your config):
-  ##  - persistence.existingClaim set to a ReadWriteMany volume (NFS/EFS) — master
+  ##  - persistence.existingClaim set to a ReadWriteMany volume (NFS/EFS) - master
   ##    and all minions share one filestore. (chart fails the render otherwise.)
   ##  - API.bind_address 0.0.0.0, API.hostname <fullname>-api.<namespace>.svc and
   ##    API.pinned_gw_name GRPC_GW are DERIVED when the chart manages the config
@@ -252,7 +252,7 @@ frontend:
   ##  - Client.server_urls should point at the frontend Service (LB fronts all frontends).
   ## Validated on 0.77.3 with NetworkPolicy enforced (Calico): an agent talking only to a
   ## minion is visible on the master. (0.76.6 had an upstream nil-pointer panic in the
-  ## minion's RemoteFileDataStore, Velocidex/velociraptor#4816 — fixed since.)
+  ## minion's RemoteFileDataStore, Velocidex/velociraptor#4816 - fixed since.)
   minions:
     enabled: false
     replicas: 2
@@ -265,13 +265,13 @@ frontend:
 ## GUI = admin web UI. Keep internal / behind VPN or authenticated Ingress.
 gui:
   containerPort: 8889
-  # GUI.public_url — the externally-reachable GUI URL. Velociraptor REQUIRES it to
+  # GUI.public_url - the externally-reachable GUI URL. Velociraptor REQUIRES it to
   # end with "/app/index.html". REQUIRED for OIDC (OAuth redirects). Match the host
   # to your Ingress, e.g. https://velociraptor.example.com/app/index.html
   # The OAuth callback Velociraptor derives (register it in the IdP) is:
   #   <scheme>://<host>/auth/oidc/<gui.oidc.name>/callback
   publicUrl: ""
-  # GUI.base_path — served sub-path behind a reverse proxy (only with manageServerConfig).
+  # GUI.base_path - served sub-path behind a reverse proxy (only with manageServerConfig).
   basePath: ""
   ## Initial administrator. An init container runs `velociraptor user add --role
   ## administrator <username> <password>` on every master start, so the account always
@@ -295,7 +295,7 @@ gui:
   ## oidc_name must match (case-sensitive) the substring in that redirect URI.
   ## Authn is delegated to the IdP; authorization still needs a Velociraptor user:
   ##   velociraptor --config <cfg> user add <email> --role administrator
-  ## NOTE: OIDC discovery is fetched EAGERLY at server start — the IdP must be
+  ## NOTE: OIDC discovery is fetched EAGERLY at server start - the IdP must be
   ## reachable from the pod or the server won't boot. With networkPolicy.enabled,
   ## add an egress rule to the issuer (443) via networkPolicy.extraEgress.
   ## Docs: https://docs.velociraptor.app/knowledge_base/tips/setup_keycloak/
@@ -306,7 +306,7 @@ gui:
     clientId: "velociraptor"
     avatar: ""          # optional icon URL shown on the login button
     # Client secret source. Prefer existingSecret (ESO/Vault) when available;
-    # otherwise set clientSecret inline (chart-managed Secret) — keep it out of git
+    # otherwise set clientSecret inline (chart-managed Secret) - keep it out of git
     # in a gitignored overrides file. existingSecret wins if both are set.
     existingSecret: ""
     existingSecretKey: "oauth_client_secret"
@@ -336,7 +336,7 @@ monitoring:
 ## Datastore volume.
 ## Single-frontend: a chart-managed RWO PVC (volumeClaimTemplate) is enough.
 ## External / scalable store: Velociraptor scales storage over a DISTRIBUTED
-## FILESYSTEM (NFS, AWS EFS, GCP Filestore) mounted at Datastore.location — there
+## FILESYSTEM (NFS, AWS EFS, GCP Filestore) mounted at Datastore.location - there
 ## is no native S3/object server datastore (S3 is only a VQL accessor).
 ## To use one, provision a ReadWriteMany PVC out-of-band (NFS/EFS CSI) and set
 ## persistence.existingClaim to it. This is also the prerequisite for a
@@ -440,7 +440,7 @@ networkPolicy:
   metricsAllowedFrom: []
   # Egress to the OIDC IdP, allowed only when gui.oidc.enabled (discovery is
   # fetched at boot). NetworkPolicy is CIDR-based (no DNS), so list the IdP's
-  # CIDR(s). Default 0.0.0.0/0 = reach any HTTPS endpoint — TIGHTEN in production.
+  # CIDR(s). Default 0.0.0.0/0 = reach any HTTPS endpoint - TIGHTEN in production.
   oidcEgressCIDRs:
     - 0.0.0.0/0
   # Port of the OIDC issuer (HTTPS).
@@ -498,7 +498,7 @@ prometheusRule:
 ## gui.initialAdmin the administrator role in them, through the server API, every
 ## reconcilePeriodSeconds. It never renames or deletes an org (do that in the GUI).
 ## Why not GUI.initial_orgs: it is only applied on the server's very first start, and
-## org_create() refuses to run offline — so orgs must be created through the live API.
+## org_create() refuses to run offline - so orgs must be created through the live API.
 ## The sidecar authenticates with an API client certificate issued at each pod start
 ## (API user "velociraptor-helm", administrator role) and kept in memory only.
 ## Per-org client config (`config client --org` returns an empty nonce offline):

@@ -1,4 +1,4 @@
-# chart-testing (https://github.com/helm/chart-testing) — used by .github/workflows/test-chart.yml
+# chart-testing (https://github.com/helm/chart-testing) - used by .github/workflows/test-chart.yml
 target-branch: main
 charts:
   - chart

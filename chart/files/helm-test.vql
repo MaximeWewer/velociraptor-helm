@@ -1,5 +1,5 @@
 /*
-  velociraptor-helm — `helm test`: the frontend serves the server certificate, and the GUI
+  velociraptor-helm - `helm test`: the frontend serves the server certificate, and the GUI
   answers: with Basic auth the initial admin's credentials are accepted (HTTP 200); with
   OIDC (no password login possible) the API rejects an anonymous call (HTTP 401).
   Inputs (--env): FrontendURL, GuiURL, GuiAuth (basic|oidc), AdminUser, AdminPassword.

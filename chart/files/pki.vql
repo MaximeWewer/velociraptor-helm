@@ -1,5 +1,5 @@
 /*
-  velociraptor-helm — server identity (PKI) bootstrap & certificate renewal.
+  velociraptor-helm - server identity (PKI) bootstrap & certificate renewal.
 
   Runs in the chart's own Velociraptor image (no shell, no extra image):
     velociraptor query --env Key=Value ... "<this program>"

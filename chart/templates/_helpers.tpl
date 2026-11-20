@@ -305,7 +305,7 @@ volumes:
 
 {{/* "true" when the chart owns the operational config. Forced in bootstrap mode: a raw
      `config generate` binds the GUI to 127.0.0.1, stores data under /var/tmp (off the PVC,
-     read-only rootfs) and points agents at localhost — unusable without the overlay. */}}
+     read-only rootfs) and points agents at localhost - unusable without the overlay. */}}
 {{- define "velociraptor.manageServerConfig" -}}
 {{- if or .Values.config.manageServerConfig (eq (include "velociraptor.configSource" .) "bootstrap") -}}true{{- end -}}
 {{- end }}
@@ -336,8 +336,8 @@ Operational config overlay (YAML), deep-merged onto the base config (secrets) by
 config-merge init container. Built as an accumulated dict so each top-level key appears
 once across all enabled features (oidc / initializeServer / customArtifacts / manageServerConfig).
 - manageServerConfig=false: legacy targeted overlay (oidc + init + artifacts only).
-- manageServerConfig=true:  chart owns the operational config — ports, bind addresses,
-  hostnames, URLs, datastore, logging, monitoring, authenticator type — derived from chart
+- manageServerConfig=true:  chart owns the operational config - ports, bind addresses,
+  hostnames, URLs, datastore, logging, monitoring, authenticator type - derived from chart
   values; secrets stay in the base. config.server.extraConfig is deep-merged last (wins).
 */}}
 {{- define "velociraptor.configOverlay" -}}
@@ -346,7 +346,7 @@ once across all enabled features (oidc / initializeServer / customArtifacts / ma
 {{- $oidc := .Values.gui.oidc.enabled -}}
 {{- $srv := .Values.config.server -}}
 {{/*
-LAYER 1 (lowest precedence) — raw per-section passthrough maps, keyed with the upstream
+LAYER 1 (lowest precedence) - raw per-section passthrough maps, keyed with the upstream
 config field names. Lets any operational field be set verbatim; chart-derived fields
 (layer 2) and extraConfig (layer 3) override these.
 */}}
@@ -363,7 +363,7 @@ config field names. Lets any operational field be set verbatim; chart-derived fi
   {{- if kindIs "bool" $srv.debugMode }}{{- $_ := set $o "debug_mode" $srv.debugMode -}}{{- end -}}
 {{- end -}}
 {{/*
-LAYER 2 — chart-derived operational fields. Built into $f then deep-merged so they win
+LAYER 2 - chart-derived operational fields. Built into $f then deep-merged so they win
 over the raw maps. GUI authenticator / Frontend artifacts apply in legacy mode too.
 */}}
 {{- $f := dict -}}
@@ -411,11 +411,11 @@ over the raw maps. GUI authenticator / Frontend artifacts apply in legacy mode t
     {{- $_ := set $api "pinned_gw_name" "GRPC_GW" -}}
   {{- end -}}
   {{- $_ := set $f "API" $api -}}
-  {{/* Client.server_urls — the address agents dial (see velociraptor.clientServerUrls) */}}
+  {{/* Client.server_urls - the address agents dial (see velociraptor.clientServerUrls) */}}
   {{- $_ := set $f "Client" (dict "server_urls" (include "velociraptor.clientServerUrls" . | fromJsonArray)) -}}
   {{/* Datastore */}}
   {{- $_ := set $f "Datastore" (dict "implementation" $srv.datastoreImplementation "location" .Values.persistence.mountPath "filestore_directory" .Values.persistence.mountPath) -}}
-  {{/* Monitoring — 0.0.0.0 so Prometheus can scrape when serviceMonitor is on */}}
+  {{/* Monitoring - 0.0.0.0 so Prometheus can scrape when serviceMonitor is on */}}
   {{- $_ := set $f "Monitoring" (dict "bind_address" (ternary "0.0.0.0" "127.0.0.1" .Values.serviceMonitor.enabled) "bind_port" (.Values.monitoring.containerPort | int)) -}}
   {{/* Logging */}}
   {{- $log := dict "separate_logs_per_component" $srv.logging.separateLogsPerComponent "rotation_time" ($srv.logging.rotationTime | int) "max_age" ($srv.logging.maxAge | int) -}}
@@ -425,7 +425,7 @@ over the raw maps. GUI authenticator / Frontend artifacts apply in legacy mode t
   {{- with $srv.logging.remoteSyslogComponents }}{{- $_ := set $log "remote_syslog_components" . -}}{{- end -}}
   {{- $_ := set $f "Logging" $log -}}
 {{- end -}}
-{{/* defaults — artifact search dirs: chart-shipped (initializeServer) + custom (both modes) */}}
+{{/* defaults - artifact search dirs: chart-shipped (initializeServer) + custom (both modes) */}}
 {{- $dirs := list -}}
 {{- if .Values.config.initializeServer }}{{ $dirs = append $dirs "/chart-artifacts" }}{{ end -}}
 {{- if .Values.customArtifacts.enabled }}{{ $dirs = append $dirs .Values.customArtifacts.path }}{{ end -}}
@@ -433,7 +433,7 @@ over the raw maps. GUI authenticator / Frontend artifacts apply in legacy mode t
   {{- $_ := set $f "defaults" (dict "artifact_definitions_directories" .) -}}
 {{- end -}}
 {{- $o = mergeOverwrite $o $f -}}
-{{/* LAYER 3 (highest) — raw escape hatch, overrides everything above */}}
+{{/* LAYER 3 (highest) - raw escape hatch, overrides everything above */}}
 {{- if $manage -}}
   {{- with $srv.extraConfig }}{{- $o = mergeOverwrite $o (deepCopy .) -}}{{- end -}}
 {{- end -}}

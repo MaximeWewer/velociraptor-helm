@@ -1,5 +1,5 @@
 /*
-  velociraptor-helm — declarative orgs (multi-tenancy) reconciler.
+  velociraptor-helm - declarative orgs (multi-tenancy) reconciler.
 
   Why: GUI.initial_orgs is only honoured on the server's very FIRST start (orgs added to
   the config later are silently ignored), and org_create() refuses to run offline

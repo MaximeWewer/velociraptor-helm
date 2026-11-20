@@ -6,7 +6,7 @@ hardened distroless image of [velociraptor-docker](https://github.com/MaximeWewe
 ## Architecture
 
 - **StatefulSet master, 1 replica**: the master owns the metadata datastore (single-writer). To scale the number of clients → **multi-frontend (master/minion)**, not `replicaCount` (see below).
-- **Frontend** (port 8000, gRPC/mTLS): endpoint client communications — the only external surface (`LoadBalancer` or SSL-passthrough Ingress).
+- **Frontend** (port 8000, gRPC/mTLS): endpoint client communications - the only external surface (`LoadBalancer` or SSL-passthrough Ingress).
 - **GUI** (port 8889): admin interface. Keep internal / VPN / authenticated Ingress.
 - **Server identity**: the server config embeds the CA every agent pins, the Frontend/GUI keys and the nonces. By default the chart **generates it in-cluster once and keeps it forever** (see [Server identity lifecycle](#server-identity-lifecycle)).
 - **Operational config** (ports, bind addresses, URLs, datastore, logging…): rendered from values and deep-merged onto the identity by a pinned `yq` init container.
@@ -16,9 +16,9 @@ hardened distroless image of [velociraptor-docker](https://github.com/MaximeWewe
 
 - Kubernetes **>= 1.27** (>= 1.29 for `orgs`, which uses a native sidecar), Helm **3+**.
 - Optional, only if you enable the matching feature:
-  - nginx ingress controller started with **`--enable-ssl-passthrough`** — for `frontend.ingress`.
-  - A `ReadWriteMany` StorageClass (NFS/EFS) — for `frontend.minions`.
-  - **Prometheus Operator** CRDs — for `serviceMonitor.enabled`.
+  - nginx ingress controller started with **`--enable-ssl-passthrough`** - for `frontend.ingress`.
+  - A `ReadWriteMany` StorageClass (NFS/EFS) - for `frontend.minions`.
+  - **Prometheus Operator** CRDs - for `serviceMonitor.enabled`.
 
 ## Install
 
@@ -51,10 +51,10 @@ Three sources for the server config, first match wins:
 | `config.inline` | you paste a config generated out-of-band (keep it out of git) | Helm (rendered Secret) |
 | `config.bootstrap` (**default**) | anything else | the chart's PKI job |
 
-**Bootstrap** — a `pre-install`/`pre-upgrade` hook Job (Argo CD: PreSync) running the chart's own
+**Bootstrap** - a `pre-install`/`pre-upgrade` hook Job (Argo CD: PreSync) running the chart's own
 Velociraptor image (no shell, no extra image; program in [`files/pki.vql`](files/pki.vql)):
 
-1. If the Secret `<fullname>-server-config` exists, it is **kept as-is — never regenerated**.
+1. If the Secret `<fullname>-server-config` exists, it is **kept as-is - never regenerated**.
    If it is missing, the config is **imported** from `config.bootstrap.importFrom` (default
    `<fullname>-config`, i.e. a former `config.inline` Secret) or else **generated** (`config generate`).
 2. The Frontend/GUI certificates are **renewed** when they expire within `renewBeforeDays`, with
@@ -84,7 +84,7 @@ and it never restarts itself while the server is unreachable. Hence:
   1. renew with `--set config.bootstrap.restartOnRenew=false` (and a `renewBeforeDays` above the days left):
      the new certificate is stored, the server keeps serving the old one;
   2. restart the agents while they are still connected (hunt `Admin.Client.UpdateClientConfig` with
-     `RekeyClient=N`, or your fleet tooling) — they now accept certificates issued before their start;
+     `RekeyClient=N`, or your fleet tooling) - they now accept certificates issued before their start;
   3. `kubectl rollout restart statefulset/<fullname>`.
 
 ### Migrating from `config.inline`
@@ -100,7 +100,7 @@ deletes the old Secret: same CA, same nonce, agents keep working. Note that the 
 `velociraptor user add --role administrator <username> <password>` on every master start. The password
 comes from `gui.initialAdmin.existingSecret`, or is generated once by the PKI job into `<fullname>-admin`.
 The Secret is the source of truth: a password changed in the GUI reverts at the next restart. With OIDC,
-set `username` to the admin's identity (e-mail) — the role is granted, the password is unused.
+set `username` to the admin's identity (e-mail) - the role is granted, the password is unused.
 
 ## Orgs (multi-tenancy)
 
@@ -139,8 +139,8 @@ The chart renders the operational config from values and deep-merges it onto the
 | `Logging.*` | `config.server.logging.*` |
 | `defaults.artifact_definitions_directories` | `config.initializeServer`, `customArtifacts` |
 
-Every other operational field is reachable through **raw per-section maps** using the upstream field names —
-`config.server.{client,api,gui,frontend,datastore,monitoring,defaults,security,minion}` — plus top-level scalars
+Every other operational field is reachable through **raw per-section maps** using the upstream field names -
+`config.server.{client,api,gui,frontend,datastore,monitoring,defaults,security,minion}` - plus top-level scalars
 (`serverType`, `autocertDomain`, `autocertCertCache`, `lockdown`, `debugMode`). Precedence, low → high:
 **raw section maps < chart-derived fields < `config.server.extraConfig`**. Put **no secrets** in any of them.
 Reference: [server.config.yaml](https://github.com/Velocidex/velociraptor/blob/master/docs/references/server.config.yaml).
@@ -173,7 +173,7 @@ Horizontal client scaling: `frontend.minions.enabled=true` adds a `…-minion-N`
 
 - `persistence.existingClaim` = a **ReadWriteMany** PVC (NFS/EFS) shared by master+minions (the chart fails the render otherwise).
 - `config.server.datastore`: `master_implementation: MemcacheFileDataStore`, `minion_implementation: RemoteFileDataStore`; `ExtraFrontends` (one per minion, `hostname: <fullname>-minion-0..N`, `bind_port: 8000`) via `config.server.extraConfig`. `API.*` is derived. The chart starts each minion with `--node <hostname>-<bind_port>` (dash).
-- Validated on 0.77.3 with NetworkPolicy enforced (Calico): an agent connected only to a minion is visible on the master. (0.76.6 had an upstream nil panic in the minion, Velocidex/velociraptor#4816 — fixed since.)
+- Validated on 0.77.3 with NetworkPolicy enforced (Calico): an agent connected only to a minion is visible on the master. (0.76.6 had an upstream nil panic in the minion, Velocidex/velociraptor#4816 - fixed since.)
 
 ## OIDC auth (Keycloak, Google, Azure…)
 
@@ -198,13 +198,13 @@ OIDC discovery is fetched at server start: with `networkPolicy.enabled`, list th
 | Alert | Severity | Fires when |
 |---|---|---|
 | `VelociraptorServerDown` | critical | no frontend answers on its metrics port for 5m |
-| `VelociraptorConnectedClientsDropped` | warning | connected clients < `clientsDrop.ratio` × peak of `clientsDrop.window` (fleet ≥ `minClients`) — frontend/ingress outage, or agents rejecting renewed certificates |
+| `VelociraptorConnectedClientsDropped` | warning | connected clients < `clientsDrop.ratio` × peak of `clientsDrop.window` (fleet ≥ `minClients`) - frontend/ingress outage, or agents rejecting renewed certificates |
 | `VelociraptorFrontendLoadShedding` | warning | the frontend rejects connections for 15m |
 | `VelociraptorMasterNotReady` | critical | the master is not Ready for 10m |
 | `VelociraptorCertificateCheckFailing` | warning | the certificate CronJob failed / stopped succeeding (see below) |
-| `VelociraptorIdentitySecretMissing` | critical | the identity Secret (bootstrap) disappeared — restore it before the next upgrade |
+| `VelociraptorIdentitySecretMissing` | critical | the identity Secret (bootstrap) disappeared - restore it before the next upgrade |
 
-Velociraptor exports no certificate-expiry metric, so the **certificate CronJob is the probe**: in bootstrap mode it renews; with `existingSecret` / `inline` it runs **read-only** (`CheckOnly`) and fails when the server certificates expire within `renewBeforeDays` — nothing renews a config managed outside the chart. In every mode it fails when the CA expires within `config.bootstrap.caWarnDays` (180). The rules are unit-tested with `promtool` (`ci/test-alert-rules.sh`).
+Velociraptor exports no certificate-expiry metric, so the **certificate CronJob is the probe**: in bootstrap mode it renews; with `existingSecret` / `inline` it runs **read-only** (`CheckOnly`) and fails when the server certificates expire within `renewBeforeDays` - nothing renews a config managed outside the chart. In every mode it fails when the CA expires within `config.bootstrap.caWarnDays` (180). The rules are unit-tested with `promtool` (`ci/test-alert-rules.sh`).
 
 ## Testing
 
@@ -225,13 +225,13 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 |-----|---------|-------------|
 | `image.registry` / `image.repository` | `ghcr.io` / `maximewewer/velociraptor` | Hardened distroless rebuild ([velociraptor-docker](https://github.com/MaximeWewer/velociraptor-docker)) |
 | `image.tag` | `0.77.3-distroless` | Tag; prefer `image.digest` in production |
-| `replicaCount` | `1` | **master** pods — **must stay 1** (single-writer datastore); scale via `frontend.minions` |
+| `replicaCount` | `1` | **master** pods - **must stay 1** (single-writer datastore); scale via `frontend.minions` |
 | `config.bootstrap.enabled` | `true` | Generate/keep the identity in-cluster when no `existingSecret`/`inline` |
 | `config.bootstrap.certificateValidityDays` | `3650` | Server certificate validity (renewals disconnect running agents) |
 | `config.bootstrap.renewBeforeDays` | `30` | Renew when a server certificate expires within N days |
 | `config.bootstrap.importFrom` | `""` (`<fullname>-config`) | Secret to adopt instead of generating (migration) |
 | `config.existingSecret` | `""` | Secret containing `server.config.yaml` (secret manager) |
-| `config.inline` | `""` | Inline config rendered into a chart-managed Secret — keep out of git |
+| `config.inline` | `""` | Inline config rendered into a chart-managed Secret - keep out of git |
 | `config.manageServerConfig` | `false` | Render the operational config from values (forced in bootstrap mode) |
 | `config.server.clientServerUrls` | `[]` | `Client.server_urls`; empty → derived |
 | `config.server.extraConfig` | `{}` | Raw YAML deep-merged last onto the rendered overlay (escape hatch) |
@@ -250,7 +250,7 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 | `persistence.size` | `20Gi` | Datastore size (chart-managed PVC) |
 | `persistence.existingClaim` | `""` | External PVC (NFS/EFS RWX); required for multi-frontend |
 | `networkPolicy.enabled` | `true` | NetworkPolicy |
-| `networkPolicy.frontendAllowedCIDRs` | `[0.0.0.0/0]` | CIDRs allowed to the frontend — **restrict** |
+| `networkPolicy.frontendAllowedCIDRs` | `[0.0.0.0/0]` | CIDRs allowed to the frontend - **restrict** |
 | `serviceMonitor.enabled` | `false` | Prometheus scrape |
 | `prometheusRule.enabled` | `false` | Alerting rules (server + kube-state-metrics groups) |
 | `config.bootstrap.caWarnDays` | `180` | The certificate CronJob fails when the CA expires within N days |

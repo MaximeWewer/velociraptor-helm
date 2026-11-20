@@ -28,7 +28,7 @@ jobs:
         run: |
           # The hardened "<version>-distroless" image is published from velociraptor-docker.
           # Its Dockerfile `ARG VELO_VERSION` is the single source of truth for what is
-          # actually built/pushed — track it so the chart never points at a missing tag.
+          # actually built/pushed - track it so the chart never points at a missing tag.
           VELO_VERSION=$(curl -s https://raw.githubusercontent.com/MaximeWewer/velociraptor-docker/main/Dockerfile \
             | grep -oP '^ARG VELO_VERSION=\K\S+')
           if [ -z "$VELO_VERSION" ]; then

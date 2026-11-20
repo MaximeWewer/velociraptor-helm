@@ -3,7 +3,7 @@
 {{- $svcPort := .Values.frontend.service.port }}
 # SSL passthrough for the agent frontend (L4 TLS, routed by SNI host).
 # The controller forwards raw TLS to the frontend Service; the frontend presents its
-# own cert (from the server config) and agents validate it against the pinned CA — no
+# own cert (from the server config) and agents validate it against the pinned CA - no
 # TLS termination here. PREREQ: the nginx controller must run with --enable-ssl-passthrough.
 # Use a host DISTINCT from gui.ingress (the same host:443 can't be both L4 and L7).
 apiVersion: networking.k8s.io/v1

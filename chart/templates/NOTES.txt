@@ -5,13 +5,13 @@ Velociraptor deployed: {{ $fullName }} (namespace {{ .Release.Namespace }})
 Server config source: {{ $src }}
 {{- if eq $src "bootstrap" }}
   Identity (CA + server keys) generated/kept in Secret {{ include "velociraptor.bootstrapSecretName" . }}.
-  It is NOT managed by Helm: never regenerated, kept on uninstall. BACK IT UP — losing it
+  It is NOT managed by Helm: never regenerated, kept on uninstall. BACK IT UP - losing it
   orphans every enrolled agent:
     kubectl get secret {{ include "velociraptor.bootstrapSecretName" . }} -n {{ .Release.Namespace }} -o yaml > velociraptor-identity.backup.yaml
 {{- else if eq $src "none" }}
 
 WARNING: NO CONFIG SOURCE. Set config.existingSecret or config.inline, or enable
-config.bootstrap — the pod cannot start without a server config.
+config.bootstrap - the pod cannot start without a server config.
 {{- end }}
 
 Agents (frontend, gRPC/mTLS) dial: {{ include "velociraptor.clientServerUrls" . | fromJsonArray | join ", " }}
@@ -55,5 +55,5 @@ Reminders:
     kubectl delete pod {{ $fullName }}-0 -n {{ .Release.Namespace }}
 {{- if eq $src "bootstrap" }}
   - Server certificates are valid {{ .Values.config.bootstrap.certificateValidityDays }} days. Renewing them disconnects every
-    running agent until it restarts (upstream client bug) — see values.yaml config.bootstrap.
+    running agent until it restarts (upstream client bug) - see values.yaml config.bootstrap.
 {{- end }}

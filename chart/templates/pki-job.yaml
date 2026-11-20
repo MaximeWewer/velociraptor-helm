@@ -1,0 +1,28 @@
+{{- if eq (include "velociraptor.pkiJobEnabled" .) "true" }}
+{{- $bs := .Values.config.bootstrap }}
+{{- if and (eq (include "velociraptor.configSource" .) "bootstrap") (ge (int $bs.renewBeforeDays) (int $bs.certificateValidityDays)) }}
+{{- fail "config.bootstrap.renewBeforeDays must be lower than config.bootstrap.certificateValidityDays (otherwise every run renews)." }}
+{{- end }}
+# Server identity bootstrap / renewal + initial admin password (see chart/files/pki.vql).
+# Runs before the server is (re)deployed; Argo CD maps it to a PreSync hook.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "velociraptor.fullname" . }}-pki
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pki
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: {{ $bs.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "velociraptor.pkiLabels" . | nindent 8 }}
+    spec:
+      {{- include "velociraptor.pkiPodSpec" (dict "root" . "cron" false) | nindent 6 }}
+{{- end }}

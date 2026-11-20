@@ -16,15 +16,17 @@ image:
 imagePullSecrets: []
 
 ## Server config.
-## The Velociraptor server config embeds the CA, private keys and secrets.
-## Generate it out-of-band (see https://github.com/MaximeWewer/velociraptor-docker).
+## The Velociraptor server config embeds the server IDENTITY: the CA (which every enrolled
+## agent pins), the Frontend/GUI private keys + certificates and the deployment nonces.
+## Losing or regenerating it orphans every agent, so its lifecycle matters.
 ##
-## Two supported ways to provide it:
-##   1. existingSecret — point at a Secret you manage (ESO/Vault/SealedSecrets).
-##      Preferred when you have a secret manager.
-##   2. inline — let the chart render it into a Secret. Supported when you have
-##      NO secret manager; keep the secret material OUT of git (see `inline`).
-## existingSecret wins if both are set.
+## Three sources, first match wins:
+##   1. existingSecret — a Secret you manage (ESO/Vault/SealedSecrets).
+##   2. inline         — the chart renders it into a Secret (keep it out of git).
+##   3. bootstrap      — DEFAULT. A Job generates the identity in-cluster on first install,
+##                       stores it in a Secret the chart never renders (never regenerated,
+##                       never pruned by Helm/Argo, survives uninstall) and renews the
+##                       server certificates before they expire. Nothing to generate by hand.
 config:
   # Name of an existing Secret holding the server config.
   existingSecret: ""
@@ -39,6 +41,64 @@ config:
   #   helm upgrade --install velo ./chart -f secrets.yaml         # secrets.yaml gitignored
   #   helm upgrade --install velo ./chart --set-file config.inline=server.config.yaml
   inline: ""
+
+  ## In-cluster identity bootstrap & certificate renewal (used when neither existingSecret
+  ## nor inline is set). Implemented in VQL (chart/files/pki.vql) and run by the chart's
+  ## own Velociraptor image — no shell, no extra image.
+  ##  - pre-install/pre-upgrade hook Job (Argo: PreSync): create the Secret if missing
+  ##    (import it from `importFrom` if that Secret exists, else `config generate`);
+  ##    renew the Frontend/GUI certificates if they expire within renewBeforeDays.
+  ##  - CronJob: the same check on a schedule, so certificates are renewed even when
+  ##    nobody upgrades the release for a year.
+  ## Renewal = `config reissue_certs`: SAME CA, same private keys, same nonces — agents
+  ## don't notice. The CA itself is valid 10 years and is never rotated automatically.
+  bootstrap:
+    enabled: true
+    # Secret holding the generated config. Default: <fullname>-server-config.
+    secretName: ""
+    # Migration: when the bootstrap Secret does not exist yet, copy the config from this
+    # Secret instead of generating a new identity (keeps the CA -> agents keep working).
+    # Default: <fullname>-config, i.e. the Secret rendered by a former `config.inline`,
+    # so switching from inline to bootstrap is seamless. Set an existing Secret name to
+    # adopt a config generated out-of-band.
+    importFrom: ""
+    # Validity of the server certificates issued at generation and at each renewal.
+    # Default = the CA's own lifetime (10 years), so a fresh install never renews: a
+    # renewal is DISRUPTIVE because of an upstream client bug (Velociraptor <= 0.77.3 and
+    # master): a running agent freezes "now" at process start when verifying the server
+    # certificate, so it rejects any certificate issued after it started, and it never
+    # restarts itself while the server is unreachable. After a renewal every running agent
+    # stays disconnected until its process restarts (reboot / service restart).
+    # Planned renewal without downtime (e.g. an imported config with 1-year certificates):
+    #   1. renew with restartOnRenew=false (new certificate stored, server keeps the old one);
+    #   2. restart the agents while they are still connected (hunt
+    #      Admin.Client.UpdateClientConfig with RekeyClient=N, or your fleet tooling);
+    #   3. restart the server: `kubectl rollout restart statefulset/<fullname>`.
+    certificateValidityDays: 3650
+    # Renew when a server certificate expires within this many days.
+    renewBeforeDays: 30
+    # After a renewal, delete the server pods (master + minions) so they reload the
+    # certificates — the StatefulSets recreate them. Running pods only read them at start.
+    restartOnRenew: true
+    # The CronJob fails (-> alert) when the CA expires within this many days.
+    caWarnDays: 180
+    renewal:
+      # Periodic check (CronJob). Bootstrap: renews. existingSecret / inline: read-only
+      # check that fails when the certificates expire within renewBeforeDays (an alert,
+      # since nothing renews a config managed outside the chart).
+      enabled: true
+      schedule: "17 3 * * *"
+      # IANA time zone for the schedule (empty = kube-controller-manager's zone).
+      timeZone: ""
+    activeDeadlineSeconds: 300
+    # The binary loads its whole artifact repository and spawns a second instance for
+    # `config generate` / `reissue_certs`: measured OOM at 256Mi, OK at 384Mi.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
   # Build downloadable client installers (MSI/DEB/RPM) — the upstream image's
   # first-boot behaviour. Injects (via the overlay merge)
   # `Frontend.initial_server_artifacts: [Container.InitializeServer]` so the
@@ -138,6 +198,20 @@ gui:
   # The OAuth callback Velociraptor derives (register it in the IdP) is:
   #   <scheme>://<host>/auth/oidc/<gui.oidc.name>/callback
   publicUrl: ""
+  ## Initial administrator. An init container runs `velociraptor user add --role
+  ## administrator <username> <password>` on every master start, so the account always
+  ## exists and its password always matches the Secret (the Secret is the source of truth:
+  ## a password changed in the GUI reverts at the next restart).
+  ## With OIDC, set username to the admin's identity (e-mail): the role is granted to it
+  ## and the password is unused.
+  initialAdmin:
+    enabled: true
+    username: "admin"
+    # Secret holding the password. Empty -> the PKI job generates a random one in
+    # <fullname>-admin (read it with: kubectl get secret <fullname>-admin -o
+    # jsonpath='{.data.password}' | base64 -d).
+    existingSecret: ""
+    passwordKey: "password"
   ## OIDC authentication (e.g. Keycloak). When enabled, the chart renders an
   ## overlay (GUI.public_url + GUI.authenticator) and merges it onto the base
   ## config via the yq init container (see config.overlay).

@@ -1,0 +1,34 @@
+{{- $bs := .Values.config.bootstrap }}
+{{- if eq (include "velociraptor.pkiCronEnabled" .) "true" }}
+# Periodic certificate check (same program as the hook Job):
+# - bootstrap: renews the Frontend/GUI certificates before they expire, even if the release
+#   is never upgraded;
+# - existingSecret / inline: read-only check that FAILS when they expire within
+#   renewBeforeDays (alert via kube-state-metrics / prometheusRule).
+# Both fail when the CA expires within caWarnDays.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "velociraptor.fullname" . }}-pki-renew
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pki
+spec:
+  schedule: {{ $bs.renewal.schedule | quote }}
+  {{- with $bs.renewal.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: {{ $bs.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "velociraptor.pkiLabels" . | nindent 12 }}
+        spec:
+          {{- include "velociraptor.pkiPodSpec" (dict "root" . "cron" true) | nindent 10 }}
+{{- end }}

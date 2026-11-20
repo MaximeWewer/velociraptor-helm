@@ -61,13 +61,175 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end }}
 
+{{/* Where the server config comes from: existingSecret | inline | bootstrap | none. */}}
+{{- define "velociraptor.configSource" -}}
+{{- if .Values.config.existingSecret -}}existingSecret
+{{- else if .Values.config.inline -}}inline
+{{- else if .Values.config.bootstrap.enabled -}}bootstrap
+{{- else -}}none
+{{- end -}}
+{{- end }}
+
+{{/* Secret generated & renewed by the PKI job (bootstrap mode). */}}
+{{- define "velociraptor.bootstrapSecretName" -}}
+{{- .Values.config.bootstrap.secretName | default (printf "%s-server-config" (include "velociraptor.fullname" .)) -}}
+{{- end }}
+
 {{/* Name of the Secret holding the server config. */}}
 {{- define "velociraptor.configSecretName" -}}
-{{- if .Values.config.existingSecret -}}
+{{- $src := include "velociraptor.configSource" . -}}
+{{- if eq $src "existingSecret" -}}
 {{- .Values.config.existingSecret -}}
+{{- else if eq $src "bootstrap" -}}
+{{- include "velociraptor.bootstrapSecretName" . -}}
 {{- else -}}
 {{- printf "%s-config" (include "velociraptor.fullname" .) -}}
 {{- end -}}
+{{- end }}
+
+{{/* Secret holding the initial admin password. */}}
+{{- define "velociraptor.adminSecretName" -}}
+{{- .Values.gui.initialAdmin.existingSecret | default (printf "%s-admin" (include "velociraptor.fullname" .)) -}}
+{{- end }}
+
+{{/* "true" when the PKI hook Job must run: bootstrap mode, or an admin password to generate. */}}
+{{- define "velociraptor.pkiJobEnabled" -}}
+{{- if or (eq (include "velociraptor.configSource" .) "bootstrap") (and .Values.gui.initialAdmin.enabled (not .Values.gui.initialAdmin.existingSecret)) -}}true{{- end -}}
+{{- end }}
+
+{{/* "true" when the certificate CronJob runs: renew (bootstrap) or check read-only (existingSecret / inline). */}}
+{{- define "velociraptor.pkiCronEnabled" -}}
+{{- if and .Values.config.bootstrap.renewal.enabled (ne (include "velociraptor.configSource" .) "none") -}}true{{- end -}}
+{{- end }}
+
+{{/* "true" when the PKI RBAC is needed (hook Job or CronJob). */}}
+{{- define "velociraptor.pkiEnabled" -}}
+{{- if or (eq (include "velociraptor.pkiJobEnabled" .) "true") (eq (include "velociraptor.pkiCronEnabled" .) "true") -}}true{{- end -}}
+{{- end }}
+
+{{/* Labels of the PKI job pods. No app.kubernetes.io/name on purpose: the chart's
+     NetworkPolicy selects name+instance and would block their egress to the API server. */}}
+{{- define "velociraptor.pkiLabels" -}}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: pki
+app.kubernetes.io/part-of: velociraptor
+{{- end }}
+
+{{/* Pod template spec shared by the PKI hook Job and the renewal CronJob.
+     Call with (dict "root" $ "cron" true|false). */}}
+{{- define "velociraptor.pkiPodSpec" -}}
+{{- $cron := .cron -}}
+{{- with .root -}}
+{{- $bs := .Values.config.bootstrap -}}
+{{- $bootstrap := eq (include "velociraptor.configSource" .) "bootstrap" -}}
+{{- /* Hook: manage the bootstrap Secret (if any). Cron: the active config Secret; read-only unless bootstrap. */}}
+{{- $secretName := "" -}}
+{{- if $cron }}{{ $secretName = include "velociraptor.configSecretName" . }}{{ else if $bootstrap }}{{ $secretName = include "velociraptor.bootstrapSecretName" . }}{{ end -}}
+serviceAccountName: {{ include "velociraptor.fullname" . }}-pki
+automountServiceAccountToken: true
+restartPolicy: Never
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+securityContext:
+  {{- toYaml .Values.podSecurityContext | nindent 2 }}
+containers:
+  - name: pki
+    image: {{ include "velociraptor.image" . }}
+    imagePullPolicy: {{ .Values.image.pullPolicy }}
+    args:
+      - query
+      - --nobanner
+      - --format=jsonl
+      - --env
+      - Bin=/velociraptor
+      - --env
+      - WorkDir=/work
+      - --env
+      - KubeAPI=https://kubernetes.default.svc
+      - --env
+      - SADir=/var/run/secrets/kubernetes.io/serviceaccount
+      - --env
+      - Release={{ .Release.Name }}
+      - --env
+      - SecretName={{ $secretName }}
+      - --env
+      - SecretKey={{ .Values.config.secretKey }}
+      - --env
+      - ImportFrom={{ $bs.importFrom | default (printf "%s-config" (include "velociraptor.fullname" .)) }}
+      - --env
+      - ValidityDays={{ $bs.certificateValidityDays }}
+      - --env
+      - RenewBeforeDays={{ $bs.renewBeforeDays }}
+      - --env
+      - RestartOnRenew={{ $bs.restartOnRenew }}
+      - --env
+      - PodSelector=app.kubernetes.io/name={{ include "velociraptor.name" . }},app.kubernetes.io/instance={{ .Release.Name }}
+      - --env
+      - AdminSecretName={{ if and (not $cron) .Values.gui.initialAdmin.enabled (not .Values.gui.initialAdmin.existingSecret) }}{{ include "velociraptor.adminSecretName" . }}{{ end }}
+      - --env
+      - AdminPasswordKey={{ .Values.gui.initialAdmin.passwordKey }}
+      - --env
+      - CheckOnly={{ not $bootstrap }}
+      - --env
+      - Context={{ ternary "cron" "hook" $cron }}
+      - --env
+      - CAWarnDays={{ $bs.caWarnDays }}
+      - {{ .Files.Get "files/pki.vql" | toJson }}
+    securityContext:
+      {{- toYaml .Values.securityContext | nindent 6 }}
+    resources:
+      {{- toYaml $bs.resources | nindent 6 }}
+    volumeMounts:
+      - name: work
+        mountPath: /work
+      - name: tmp
+        mountPath: /tmp
+volumes:
+  - name: work
+    emptyDir:
+      sizeLimit: 64Mi
+  - name: tmp
+    emptyDir:
+      sizeLimit: 64Mi
+{{- end }}
+{{- end }}
+
+{{/* Init container ensuring the initial admin exists with the Secret's password. */}}
+{{- define "velociraptor.adminInitContainer" -}}
+{{- if .Values.gui.initialAdmin.enabled }}
+- name: ensure-admin
+  image: {{ include "velociraptor.image" . }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  args:
+    - --config
+    - {{ .Values.config.mountPath }}
+    - --nobanner
+    - user
+    - add
+    - --role
+    - administrator
+    - {{ required "gui.initialAdmin.username is required" .Values.gui.initialAdmin.username | quote }}
+    - $(ADMIN_PASSWORD)
+  env:
+    - name: ADMIN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "velociraptor.adminSecretName" . }}
+          key: {{ .Values.gui.initialAdmin.passwordKey }}
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  volumeMounts:
+    {{- include "velociraptor.configVolumeMount" . | nindent 4 }}
+    {{- include "velociraptor.customArtifactsVolumeMount" . | nindent 4 }}
+    - name: datastore
+      mountPath: {{ .Values.persistence.mountPath }}
+    {{- if .Values.tmpDir.enabled }}
+    - name: tmp
+      mountPath: /tmp
+    {{- end }}
+{{- end }}
 {{- end }}
 
 {{/* "true" when a config overlay (init-container merge) is needed. */}}

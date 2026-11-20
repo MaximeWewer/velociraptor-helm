@@ -26,6 +26,28 @@
         "secretKey": { "type": "string" },
         "mountPath": { "type": "string" },
         "inline": { "type": "string" },
+        "bootstrap": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "secretName": { "type": "string" },
+            "importFrom": { "type": "string" },
+            "certificateValidityDays": { "type": "integer", "minimum": 2 },
+            "renewBeforeDays": { "type": "integer", "minimum": 1 },
+            "restartOnRenew": { "type": "boolean" },
+            "renewal": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "schedule": { "type": "string" },
+                "timeZone": { "type": "string" }
+              }
+            },
+            "caWarnDays": { "type": "integer", "minimum": 1 },
+            "activeDeadlineSeconds": { "type": "integer", "minimum": 30 },
+            "resources": { "type": "object" }
+          }
+        },
         "initializeServer": { "type": "boolean" },
         "overlay": {
           "type": "object",
@@ -78,6 +100,15 @@
       "properties": {
         "containerPort": { "type": "integer" },
         "publicUrl": { "type": "string" },
+        "initialAdmin": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "username": { "type": "string", "minLength": 1 },
+            "existingSecret": { "type": "string" },
+            "passwordKey": { "type": "string" }
+          }
+        },
         "oidc": {
           "type": "object",
           "properties": {

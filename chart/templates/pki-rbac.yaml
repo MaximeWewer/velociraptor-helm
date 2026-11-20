@@ -1,0 +1,79 @@
+{{- if eq (include "velociraptor.pkiEnabled" .) "true" }}
+{{- $fullName := include "velociraptor.fullname" . }}
+{{- $bootstrap := eq (include "velociraptor.configSource" .) "bootstrap" }}
+{{- $adminGenerated := and .Values.gui.initialAdmin.enabled (not .Values.gui.initialAdmin.existingSecret) }}
+{{- /*
+  Hook resources (created before the hook Job on install). before-hook-creation only:
+  they persist between upgrades so the renewal CronJob can use the same ServiceAccount.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullName }}-pki
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pki
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-pki
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pki
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  # Read / renew only the Secrets this chart owns (create cannot be scoped by name).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- if $bootstrap }}
+      - {{ include "velociraptor.bootstrapSecretName" . }}
+      - {{ .Values.config.bootstrap.importFrom | default (printf "%s-config" $fullName) }}
+      {{- end }}
+      {{- if $adminGenerated }}
+      - {{ include "velociraptor.adminSecretName" . }}
+      {{- end }}
+      {{- if and (not $bootstrap) (eq (include "velociraptor.pkiCronEnabled" .) "true") }}
+      # read-only certificate expiry check of a config managed outside the chart
+      - {{ include "velociraptor.configSecretName" . }}
+      {{- end }}
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  {{- if and $bootstrap .Values.config.bootstrap.restartOnRenew }}
+  # Restart the server pods after a certificate renewal.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-pki
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pki
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-pki
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullName }}-pki
+    namespace: {{ .Release.Namespace }}
+{{- end }}

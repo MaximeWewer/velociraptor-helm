@@ -1,0 +1,198 @@
+/*
+  velociraptor-helm — server identity (PKI) bootstrap & certificate renewal.
+
+  Runs in the chart's own Velociraptor image (no shell, no extra image):
+    velociraptor query --env Key=Value ... "<this program>"
+  Idempotent: safe on every install / upgrade / Argo sync and on a schedule.
+
+  1. Ensure the server-config Secret (CA + server keys + nonces) exists.
+       present -> kept as-is. NEVER regenerated: every enrolled agent pins this CA.
+       missing -> imported from ImportFrom (e.g. the former config.inline Secret), else
+                  generated (`config generate`, then `config reissue_certs --validity`).
+  2. Renew the Frontend / GUI certificates when they expire in < RenewBeforeDays, with
+     `config reissue_certs` (same CA, same private keys, same nonces -> transparent for
+     agents), then optionally delete the server pods so they load the new certificates.
+  3. Ensure the initial-admin password Secret exists (random) when AdminSecretName is set.
+
+  CheckOnly=true (renewal CronJob for a config managed OUTSIDE the chart: existingSecret /
+  inline): read-only. Never imports, generates, writes or restarts anything; FAILS when a
+  server certificate expires within RenewBeforeDays, so the CronJob failure raises an alert.
+  Context=cron also turns "the CA expires within CAWarnDays" into a failure (an alert);
+  in the hook Job it is only a warning, so it never blocks an upgrade.
+
+  Any failure is logged at ERROR level, which makes `velociraptor query` exit 1 and
+  fails the Job (Helm aborts the install/upgrade, Argo fails the PreSync hook).
+
+  Inputs (--env): Bin, WorkDir, KubeAPI, SADir, Release, SecretName, SecretKey,
+  ImportFrom, ValidityDays, RenewBeforeDays, RestartOnRenew, PodSelector,
+  AdminSecretName, AdminPasswordKey, CheckOnly, Context, CAWarnDays.
+*/
+
+LET Auth <= "Bearer " + read_file(filename=SADir + "/token")
+LET NS <= read_file(filename=SADir + "/namespace")
+LET KubeCA <= read_file(filename=SADir + "/ca.crt")
+LET SecretsURL <= KubeAPI + "/api/v1/namespaces/" + NS + "/secrets"
+LET PodsURL <= KubeAPI + "/api/v1/namespaces/" + NS + "/pods"
+LET Now <= format(format="%v", args=timestamp(epoch=now()))
+LET Check <= CheckOnly = "true"
+
+LET fail(msg) = log(level="ERROR", message="pki: %v", args=msg)
+
+-- Kubernetes REST call -> rows of {Response, Content}.
+LET k8s(method, url, body, ctype, params) = SELECT Response, Content FROM http_client(
+    url=url, method=method, data=body, params=params, root_ca=KubeCA,
+    chunk_size=100000000,
+    headers=dict(Authorization=Auth, `Content-Type`=ctype, Accept="application/json"))
+LET getSecret(name) = SELECT * FROM k8s(method="GET", url=SecretsURL + "/" + name,
+    body="", ctype="application/json", params=dict())
+LET secretValue(row, key) = base64decode(
+    string=get(item=parse_json(data=row.Content).data, field=key) || "")
+LET secretData(key, value) = to_dict(item={
+    SELECT key AS _key, base64encode(string=value) AS _value FROM scope()})
+
+-- Run the velociraptor binary; return stdout, or fail on a non-zero exit code.
+LET run(argv) = SELECT * FROM execve(argv=argv, sep="\x00\x00", length=100000000)
+LET stdout(argv) = SELECT * FROM foreach(row={
+    SELECT run(argv=argv) AS R FROM scope()
+  }, query={
+    SELECT if(condition=R[-1].ReturnCode = 0,
+              then=join(array=R.Stdout, sep=""),
+              else=fail(msg=format(format="%v exited %v: %v",
+                                   args=[argv, R[-1].ReturnCode, join(array=R.Stderr, sep="")]))) AS Out
+    FROM scope()
+  })
+
+-- Days until a PEM certificate expires.
+LET certDays(pem) = int(int=(timestamp(epoch=parse_x509(data=base64decode(
+    string=regex_replace(source=pem, re='''-+(BEGIN|END) CERTIFICATE-+|\s''', replace="")
+  ))[0].NotAfter).Unix - now()) / 86400)
+LET daysOf(cfg) = SELECT certDays(pem=Y.Client.ca_certificate) AS ca,
+                         certDays(pem=Y.Frontend.certificate) AS frontend,
+                         certDays(pem=Y.GUI.gw_certificate) AS gui
+  FROM foreach(row={SELECT parse_yaml(filename=cfg, accessor="data") AS Y FROM scope()})
+
+-- ── 1. Locate (or import / generate) the server config ─────────────────────────────
+-- SecretName empty = config managed elsewhere (existingSecret / inline): admin step only.
+LET T <= if(condition=SecretName, then=getSecret(name=SecretName))
+LET TStatus <= T[0].Response
+LET Imp <= if(condition=TStatus = 404 AND ImportFrom AND NOT Check, then=getSecret(name=ImportFrom))
+LET ImportedConfig <= if(condition=Imp[0].Response = 200,
+                         then=secretValue(row=Imp[0], key=SecretKey))
+
+LET Source <= if(condition=NOT SecretName, then="disabled",
+              else=if(condition=TStatus = 200, then="existing",
+                   else=if(condition=TStatus = 404 AND NOT Check,
+                           then=if(condition=ImportedConfig, then="imported", else="generated"),
+                           else="error")))
+LET Managed <= Source != "disabled" AND Source != "error"
+LET _e1 <= if(condition=Source = "error",
+              then=fail(msg=format(format="GET secret %v -> HTTP %v %v",
+                                   args=[SecretName, TStatus, T[0].Content])))
+
+LET Current <= if(condition=Source = "existing", then=secretValue(row=T[0], key=SecretKey),
+               else=if(condition=Source = "imported", then=ImportedConfig,
+                       else=if(condition=Source = "generated",
+                               then=stdout(argv=[Bin, "--nobanner", "config", "generate"])[0].Out)))
+LET _e2 <= if(condition=Managed AND NOT Current,
+              then=fail(msg=format(format="secret %v has no key %v (or generation failed)",
+                                   args=[SecretName, SecretKey])))
+LET OK1 <= Managed AND Current
+
+-- ── 2. Renew the server certificates if needed ──────────────────────────────────────
+LET Before <= if(condition=OK1, then=daysOf(cfg=Current)[0])
+LET NeedRenew <= OK1 AND (Source = "generated"
+                          OR Before.frontend < int(int=RenewBeforeDays)
+                          OR Before.gui < int(int=RenewBeforeDays))
+LET Renew <= NeedRenew AND NOT Check
+LET _e0 <= if(condition=NeedRenew AND Check,
+              then=fail(msg=format(format="server certificates of %v expire in %v days (frontend) / %v days (GUI). This config is managed outside the chart (existingSecret/inline): renew it (velociraptor config reissue_certs), update the Secret and restart the server.",
+                                   args=[SecretName, Before.frontend, Before.gui])))
+LET _w <= if(condition=Renew,
+             then=copy(accessor="data", filename=Current, dest=WorkDir + "/current.yaml"))
+LET Final <= if(condition=Renew,
+                then=stdout(argv=[Bin, "--nobanner", "--config", WorkDir + "/current.yaml",
+                                  "config", "reissue_certs", "--validity", ValidityDays])[0].Out,
+                else=Current)
+LET After <= if(condition=OK1, then=daysOf(cfg=Final)[0])
+LET _e3 <= if(condition=Renew AND NOT After.frontend > int(int=RenewBeforeDays),
+              then=fail(msg=format(format="renewal produced a certificate valid %v days only",
+                                   args=After.frontend)))
+LET _w2 <= if(condition=Renew AND Source != "generated",
+              then=log(level="WARNING", message="pki: server certificates renewed. Agents running since before %v will reject the new certificate until their process restarts (upstream client bug, Velociraptor <= 0.77.3): restart them (see config.bootstrap.certificateValidityDays in values.yaml).", args=Now))
+LET CAMsg <= format(format="the CA itself expires in %v days. It cannot be rotated without re-enrolling every agent: plan a migration.", args=After.ca)
+LET _w3 <= if(condition=OK1 AND After.ca < int(int=CAWarnDays),
+              then=if(condition=Context = "cron", then=fail(msg=CAMsg),
+                      else=log(level="WARNING", message="pki: %v", args=CAMsg)))
+LET OK2 <= OK1 AND (NOT Renew OR After.frontend > int(int=RenewBeforeDays))
+
+-- ── 3. Persist ──────────────────────────────────────────────────────────────────────
+-- The Secret is created by this Job, never rendered by the chart: Helm never deletes it
+-- and Argo never prunes it (no tracking metadata + explicit Prune=false).
+LET Labels <= dict(`app.kubernetes.io/part-of`="velociraptor",
+                   `velociraptor.app/release`=Release,
+                   `velociraptor.app/managed-by`="velociraptor-helm-pki")
+LET CreateAnn <= dict(`argocd.argoproj.io/sync-options`="Prune=false",
+                      `argocd.argoproj.io/compare-options`="IgnoreExtraneous",
+                      `velociraptor.app/source`=Source,
+                      `velociraptor.app/imported-from`=if(condition=Source = "imported", then=ImportFrom, else=""),
+                      `velociraptor.app/created-at`=Now,
+                      `velociraptor.app/renewed-at`=Now)
+LET Created <= if(condition=OK2 AND Source != "existing",
+  then=k8s(method="POST", url=SecretsURL, ctype="application/json", params=dict(),
+           body=serialize(format="json", item=dict(
+             apiVersion="v1", kind="Secret", type="Opaque",
+             metadata=dict(name=SecretName, labels=Labels, annotations=CreateAnn),
+             data=secretData(key=SecretKey, value=Final)))))
+LET _e4 <= if(condition=OK2 AND Source != "existing" AND Created[0].Response != 201,
+              then=fail(msg=format(format="create secret %v -> HTTP %v %v",
+                                   args=[SecretName, Created[0].Response, Created[0].Content])))
+
+LET Patched <= if(condition=OK2 AND Source = "existing" AND Renew,
+  then=k8s(method="PATCH", url=SecretsURL + "/" + SecretName,
+           ctype="application/merge-patch+json", params=dict(),
+           body=serialize(format="json", item=dict(
+             metadata=dict(annotations=dict(`velociraptor.app/renewed-at`=Now)),
+             data=secretData(key=SecretKey, value=Final)))))
+LET _e5 <= if(condition=OK2 AND Source = "existing" AND Renew AND Patched[0].Response != 200,
+              then=fail(msg=format(format="patch secret %v -> HTTP %v %v",
+                                   args=[SecretName, Patched[0].Response, Patched[0].Content])))
+
+-- Running servers read their certificates at start-up only: restart them after a renewal.
+LET Restart <= OK2 AND Source = "existing" AND Renew AND RestartOnRenew = "true" AND PodSelector
+LET PodList <= if(condition=Restart,
+  then=k8s(method="GET", url=PodsURL, body="", ctype="application/json",
+           params=dict(labelSelector=PodSelector)))
+LET Restarted <= if(condition=Restart, then={
+  SELECT Name, Response FROM foreach(
+    row={SELECT metadata.name AS Name
+         FROM foreach(row=parse_json(data=PodList[0].Content).items)},
+    query={SELECT Name, Response FROM k8s(method="DELETE", url=PodsURL + "/" + Name,
+                                          body="", ctype="application/json", params=dict())})
+})
+
+-- ── 4. Initial admin password ───────────────────────────────────────────────────────
+LET A <= if(condition=AdminSecretName, then=getSecret(name=AdminSecretName))
+LET AdminCreated <= if(condition=AdminSecretName AND A[0].Response = 404,
+  then=k8s(method="POST", url=SecretsURL, ctype="application/json", params=dict(),
+           body=serialize(format="json", item=dict(
+             apiVersion="v1", kind="Secret", type="Opaque",
+             metadata=dict(name=AdminSecretName, labels=Labels, annotations=dict(
+               `argocd.argoproj.io/sync-options`="Prune=false",
+               `argocd.argoproj.io/compare-options`="IgnoreExtraneous",
+               `velociraptor.app/created-at`=Now)),
+             data=secretData(key=AdminPasswordKey,
+                             value=regex_replace(source=format(format="%s%s", args=[uuid(), uuid()]),
+                                                 re="-", replace=""))))))
+LET _e6 <= if(condition=AdminSecretName AND A[0].Response = 404 AND AdminCreated[0].Response != 201,
+              then=fail(msg=format(format="create secret %v -> HTTP %v %v",
+                                   args=[AdminSecretName, AdminCreated[0].Response, AdminCreated[0].Content])))
+LET _e7 <= if(condition=AdminSecretName AND NOT (A[0].Response = 200 OR A[0].Response = 404),
+              then=fail(msg=format(format="GET secret %v -> HTTP %v", args=[AdminSecretName, A[0].Response])))
+
+SELECT SecretName AS Secret, Source, Renew AS Renewed,
+       Before AS DaysLeftBefore, After AS DaysLeftAfter,
+       Restarted.Name AS RestartedPods,
+       if(condition=AdminSecretName,
+          then=if(condition=A[0].Response = 200, then="present",
+                  else=if(condition=AdminCreated[0].Response = 201, then="created", else="error"))) AS AdminSecret
+FROM scope()

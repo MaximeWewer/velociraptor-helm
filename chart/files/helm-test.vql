@@ -1,0 +1,24 @@
+/*
+  velociraptor-helm — `helm test`: the frontend serves the server certificate, and the GUI
+  answers: with Basic auth the initial admin's credentials are accepted (HTTP 200); with
+  OIDC (no password login possible) the API rejects an anonymous call (HTTP 401).
+  Inputs (--env): FrontendURL, GuiURL, GuiAuth (basic|oidc), AdminUser, AdminPassword.
+*/
+-- Do not name a stored query like a built-in (get, url...): the built-in wins and the
+-- call silently yields NULL.
+LET probe(target, creds) = SELECT Response FROM http_client(url=target, skip_verify=TRUE,
+    headers=if(condition=creds, then=dict(Authorization="Basic " + base64encode(string=creds)), else=dict()))
+
+-- Materialize (LET <=): indexing a stored-query call directly yields NULL.
+LET F <= probe(target=FrontendURL + "/server.pem", creds="")
+LET Basic <= GuiAuth = "basic" AND AdminUser
+LET G <= probe(target=GuiURL + "/api/v1/GetUserUITraits",
+             creds=if(condition=Basic, then=AdminUser + ":" + AdminPassword, else=""))
+LET Expected <= if(condition=Basic, then=200, else=401)
+
+LET _e1 <= if(condition=F[0].Response != 200,
+              then=log(level="ERROR", message="frontend %v/server.pem -> HTTP %v", args=[FrontendURL, F[0].Response]))
+LET _e2 <= if(condition=G[0].Response != Expected,
+              then=log(level="ERROR", message="GUI API -> HTTP %v, expected %v (%v)", args=[G[0].Response, Expected, GuiAuth]))
+
+SELECT F[0].Response AS FrontendServerPem, G[0].Response AS GuiApi, Expected FROM scope()

@@ -1,0 +1,8 @@
+# chart-testing (https://github.com/helm/chart-testing) — used by .github/workflows/test-chart.yml
+target-branch: main
+charts:
+  - chart
+# The release workflow stamps the version with the release date: no manual bump to enforce.
+check-version-increment: false
+validate-maintainers: false
+helm-extra-args: --timeout 600s

@@ -6,4 +6,3 @@
 .idea/
 *.tgz
 ci/
-tests/

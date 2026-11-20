@@ -1,0 +1,17 @@
+# ct install: orgs reconciler sidecar + metrics port, behind an SSL-passthrough Ingress object.
+frontend:
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: true
+    host: agents.ct.test
+gui:
+  publicUrl: https://gui.ct.test/app/index.html
+persistence:
+  size: 1Gi
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 1Gi}
+orgs:
+  items:
+    - {id: O01, name: "CI org"}

@@ -1,0 +1,87 @@
+# promtool unit tests for chart/templates/prometheusrule.yaml.
+# Rendered by ci/test-alert-rules.sh with release "velociraptor" in namespace "dfir".
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Fleet of 100 agents for 6h, then 80% disconnect (e.g. renewed certificate rejected).
+  - interval: 5m
+    input_series:
+      - series: 'client_comms_current_connections{namespace="dfir",service="velociraptor-gui"}'
+        values: '100x72 20x12'
+      - series: 'up{namespace="dfir",service="velociraptor-gui"}'
+        values: '1x84'
+    alert_rule_test:
+      - eval_time: 6h05m
+        alertname: VelociraptorConnectedClientsDropped
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: VelociraptorConnectedClientsDropped
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Connected Velociraptor clients dropped below 50% of the 6h peak.
+              description: 20 clients connected. If the server certificates were just renewed, running agents reject them until they restart (see the chart README, "Certificate renewal").
+      - eval_time: 6h30m
+        alertname: VelociraptorServerDown
+        exp_alerts: []
+
+  # Tiny fleet (below minClients): a drop must not page.
+  - interval: 5m
+    input_series:
+      - series: 'client_comms_current_connections{namespace="dfir",service="velociraptor-gui"}'
+        values: '5x72 1x12'
+    alert_rule_test:
+      - eval_time: 6h30m
+        alertname: VelociraptorConnectedClientsDropped
+        exp_alerts: []
+
+  # Server not scraped anymore.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="dfir",service="velociraptor-gui"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: VelociraptorServerDown
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Velociraptor server dfir/velociraptor is not scraped / down.
+              description: No Velociraptor frontend answered on its metrics port for 5 minutes.
+
+  # Certificate CronJob: last run (t=2h) did not succeed, last success one day earlier.
+  # (1m samples: a series older than the 5m lookback is stale and resets `for:`.)
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_schedule_time{namespace="dfir",cronjob="velociraptor-pki-renew"}'
+        values: '7200x240'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="dfir",cronjob="velociraptor-pki-renew"}'
+        values: '0x240'
+      - series: 'kube_cronjob_created{namespace="dfir",cronjob="velociraptor-pki-renew"}'
+        values: '0x240'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: VelociraptorCertificateCheckFailing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Velociraptor certificate check dfir/velociraptor-pki-renew is failing.
+              description: "Read the logs of the last velociraptor-pki-renew Job: server certificates or the CA expire soon, or the renewal failed."
+
+  # Identity Secret deleted.
+  - interval: 1m
+    input_series:
+      - series: 'kube_secret_info{namespace="dfir",secret="velociraptor-server-config"}'
+        values: '1x5 _x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: VelociraptorIdentitySecretMissing
+        exp_alerts: []
+      # last sample at 5m, stale after the 5m lookback (~10m), then `for: 5m`
+      - eval_time: 20m
+        alertname: VelociraptorIdentitySecretMissing
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: dfir, secret: velociraptor-server-config}
+            exp_annotations:
+              summary: The Velociraptor identity Secret dfir/velociraptor-server-config is gone.
+              description: "It holds the CA every agent pins. Restore it from backup BEFORE the next install/upgrade: otherwise a new CA is generated and every agent is orphaned."

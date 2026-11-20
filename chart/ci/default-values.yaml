@@ -1,0 +1,9 @@
+# ct install: default path (in-cluster identity bootstrap, generated admin, helm test).
+frontend:
+  service:
+    type: ClusterIP
+persistence:
+  size: 1Gi
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 1Gi}

@@ -31,6 +31,17 @@ spec:
         - protocol: TCP
           port: {{ $.Values.gui.containerPort }}
     {{- end }}
+    # `helm test` pod of this release (frontend + GUI checks); only exists during the test.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: test
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gui.containerPort }}
+        - protocol: TCP
+          port: {{ .Values.frontend.containerPort }}
     {{- if .Values.frontend.minions.enabled }}
     # Multi-frontend: minions reach the master API (gRPC) for RemoteFileDataStore.
     - from:

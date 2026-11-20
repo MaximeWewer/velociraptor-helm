@@ -1,0 +1,63 @@
+{{- $fullName := include "velociraptor.fullname" . }}
+# `helm test`: frontend reachable and serving its certificate; GUI login with the initial
+# admin. Runs the chart's own image (VQL http_client), no extra image.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $fullName }}-test
+  # No app.kubernetes.io/name: not selected by the chart's NetworkPolicy (egress free),
+  # and allowed in by it through component=test.
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: test
+    app.kubernetes.io/part-of: velociraptor
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: test
+      image: {{ include "velociraptor.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      args:
+        - query
+        - --nobanner
+        - --format=jsonl
+        - --env
+        - FrontendURL=https://{{ $fullName }}-frontend.{{ .Release.Namespace }}.svc:{{ .Values.frontend.service.port }}
+        - --env
+        - GuiURL=https://{{ $fullName }}-gui.{{ .Release.Namespace }}.svc:{{ .Values.gui.service.port }}
+        - --env
+        - GuiAuth={{ ternary "oidc" "basic" .Values.gui.oidc.enabled }}
+        - --env
+        - AdminUser={{ if .Values.gui.initialAdmin.enabled }}{{ .Values.gui.initialAdmin.username }}{{ end }}
+        - --env
+        - AdminPassword=$(ADMIN_PASSWORD)
+        - {{ .Files.Get "files/helm-test.vql" | toJson }}
+      {{- if .Values.gui.initialAdmin.enabled }}
+      env:
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "velociraptor.adminSecretName" . }}
+              key: {{ .Values.gui.initialAdmin.passwordKey }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 384Mi
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir:
+        sizeLimit: 64Mi

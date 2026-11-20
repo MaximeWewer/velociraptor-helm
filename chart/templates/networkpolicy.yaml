@@ -61,6 +61,17 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+    {{- if .Values.frontend.minions.enabled }}
+    # Multi-frontend: minions (selected by this policy too) dial the master API (gRPC).
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "velociraptor.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: master
+      ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.apiPort }}
+    {{- end }}
     {{- if .Values.gui.oidc.enabled }}
     # OIDC: reach the IdP issuer (discovery fetched at server boot).
     - to:

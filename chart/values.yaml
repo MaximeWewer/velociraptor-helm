@@ -250,11 +250,9 @@ frontend:
   ##        .. "-N", bind_address 0.0.0.0 / bind_port 8000. The chart starts each minion
   ##        with `--node <hostname>-<bind_port>` (hyphen, e.g. ...-minion-0-8000).
   ##  - Client.server_urls should point at the frontend Service (LB fronts all frontends).
-  ## NOTE: Velociraptor 0.76.6 has an upstream nil-pointer panic in the minion's
-  ## RemoteFileDataStore (datastore/remote.go ListChildren), tracked around
-  ## Velocidex/velociraptor#4816. The chart topology is correct (minion connects and
-  ## the ReplicationService links to the master), but minion bring-up may crash until
-  ## that upstream fix lands. Single-frontend (master only) is unaffected.
+  ## Validated on 0.77.3 with NetworkPolicy enforced (Calico): an agent talking only to a
+  ## minion is visible on the master. (0.76.6 had an upstream nil-pointer panic in the
+  ## minion's RemoteFileDataStore, Velocidex/velociraptor#4816 — fixed since.)
   minions:
     enabled: false
     replicas: 2

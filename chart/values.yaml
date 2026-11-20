@@ -173,11 +173,13 @@ config:
     # Raw YAML deep-merged LAST onto the rendered overlay (overrides EVERYTHING above).
     extraConfig: {}
 
-  # Build downloadable client installers (MSI/DEB/RPM) — the upstream image's
-  # first-boot behaviour. Injects (via the overlay merge)
-  # `Frontend.initial_server_artifacts: [Container.InitializeServer]` so the
-  # server packages clients on startup (visible in the GUI). Needs a writable
-  # datastore (default) + tmpDir.enabled (default). Triggers the overlay merge.
+  # Build downloadable client installers (MSI/DEB/RPM) — the official Docker image's
+  # first-boot behaviour. Injects `Frontend.initial_server_artifacts:
+  # [Container.InitializeServer]` and ships that artifact itself (the hardened image does
+  # not contain it: referencing it without the chart's copy crashes the server with
+  # "Unknown artifact Container.InitializeServer"). Runs on the server's FIRST start only
+  # (empty datastore). Downloads the client binaries from GitHub: with networkPolicy
+  # enabled, egress 443 is opened to networkPolicy.toolsEgressCIDRs.
   initializeServer: false
   # Config overlay: a yq init container deep-merges a chart-rendered overlay onto
   # the base config at startup (the base, with CA/keys, stays untouched in its
@@ -445,6 +447,10 @@ networkPolicy:
     - 0.0.0.0/0
   # Port of the OIDC issuer (HTTPS).
   oidcEgressPort: 443
+  # Egress 443 for config.initializeServer (client binaries downloaded from GitHub
+  # releases). CIDR-based: GitHub's ranges change, hence 0.0.0.0/0 by default.
+  toolsEgressCIDRs:
+    - 0.0.0.0/0
   # Extra egress rules appended (DNS is always allowed).
   extraEgress: []
 

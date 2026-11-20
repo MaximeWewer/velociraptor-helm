@@ -210,6 +210,7 @@
         "metricsAllowedFrom": { "type": "array" },
         "oidcEgressCIDRs": { "type": "array", "items": { "type": "string" } },
         "oidcEgressPort": { "type": "integer" },
+        "toolsEgressCIDRs": { "type": "array", "items": { "type": "string" } },
         "extraEgress": { "type": "array" }
       }
     },

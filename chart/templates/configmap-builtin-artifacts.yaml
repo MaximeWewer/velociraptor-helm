@@ -1,0 +1,13 @@
+{{- if .Values.config.initializeServer }}
+# Artifacts the chart ships because the hardened image does not (the official Docker
+# image bakes them into /custom_artifacts/). Loaded via defaults.artifact_definitions_directories.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "velociraptor.fullname" . }}-builtin-artifacts
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+data:
+  Container.InitializeServer.yaml: |
+{{ .Files.Get "files/artifacts/Container.InitializeServer.yaml" | indent 4 }}
+{{- end }}

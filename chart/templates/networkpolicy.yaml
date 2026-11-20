@@ -72,6 +72,18 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.oidcEgressPort }}
     {{- end }}
+    {{- if .Values.config.initializeServer }}
+    # Container.InitializeServer downloads the client binaries (GitHub releases) to build
+    # the MSI/DEB/RPM installers on first start.
+    - to:
+        {{- range .Values.networkPolicy.toolsEgressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
     {{- with .Values.networkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

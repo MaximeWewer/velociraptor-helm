@@ -501,14 +501,24 @@ oauth_client_secret
   mountPath: {{ .Values.customArtifacts.path | quote }}
   readOnly: true
 {{- end }}
+{{- if .Values.config.initializeServer }}
+- name: builtin-artifacts
+  mountPath: /chart-artifacts
+  readOnly: true
+{{- end }}
 {{- end }}
 
-{{/* Custom-artifacts volume (ConfigMap-backed). */}}
+{{/* Custom-artifacts volumes (ConfigMap-backed). */}}
 {{- define "velociraptor.customArtifactsVolume" -}}
 {{- if .Values.customArtifacts.enabled }}
 - name: custom-artifacts
   configMap:
     name: {{ .Values.customArtifacts.existingConfigMap | default (printf "%s-custom-artifacts" (include "velociraptor.fullname" .)) }}
+{{- end }}
+{{- if .Values.config.initializeServer }}
+- name: builtin-artifacts
+  configMap:
+    name: {{ include "velociraptor.fullname" . }}-builtin-artifacts
 {{- end }}
 {{- end }}
 

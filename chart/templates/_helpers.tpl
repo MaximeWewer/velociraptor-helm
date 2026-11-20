@@ -196,6 +196,77 @@ volumes:
 {{- end }}
 {{- end }}
 
+{{/* Orgs: an init container issues an in-memory API client certificate (offline), then a
+     native sidecar reconciles the declared orgs through the live API (chart/files/orgs.vql). */}}
+{{- define "velociraptor.orgsInitContainers" -}}
+{{- if .Values.orgs.items }}
+{{- if not (semverCompare ">=1.29.0-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "orgs.items needs Kubernetes >= 1.29 (native sidecar containers)." }}
+{{- end }}
+{{- range .Values.orgs.items }}
+{{- if not (and .id .name) }}{{ fail "each orgs.items[] entry needs an id and a name" }}{{ end }}
+{{- end }}
+- name: orgs-api-client
+  image: {{ include "velociraptor.image" . }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  args:
+    - --config
+    - {{ .Values.config.mountPath }}
+    - --nobanner
+    - config
+    - api_client
+    - --name
+    - velociraptor-helm
+    - --role
+    - administrator
+    - /api/api.yaml
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  volumeMounts:
+    {{- include "velociraptor.configVolumeMount" . | nindent 4 }}
+    {{- include "velociraptor.customArtifactsVolumeMount" . | nindent 4 }}
+    - name: datastore
+      mountPath: {{ .Values.persistence.mountPath }}
+    - name: api-client
+      mountPath: /api
+    {{- if .Values.tmpDir.enabled }}
+    - name: tmp
+      mountPath: /tmp
+    {{- end }}
+- name: orgs-reconciler
+  image: {{ include "velociraptor.image" . }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  # Native sidecar: a local VQL loop that never exits (so it never delays the server's
+  # start) and calls the API client every period, retrying until the API is up.
+  restartPolicy: Always
+  args:
+    - --nobanner
+    - query
+    - --format=jsonl
+    - --env
+    - Bin=/velociraptor
+    - --env
+    - ApiConfig=/api/api.yaml
+    - --env
+    - {{ printf "Orgs=%s" (toJson .Values.orgs.items) | quote }}
+    - --env
+    - Admin={{ if .Values.gui.initialAdmin.enabled }}{{ .Values.gui.initialAdmin.username }}{{ end }}
+    - --env
+    - Period={{ .Values.orgs.reconcilePeriodSeconds }}
+    - {{ .Files.Get "files/orgs.vql" | toJson }}
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  resources:
+    {{- toYaml .Values.orgs.resources | nindent 4 }}
+  volumeMounts:
+    - name: api-client
+      mountPath: /api
+      readOnly: true
+    - name: orgs-tmp
+      mountPath: /tmp
+{{- end }}
+{{- end }}
+
 {{/* Init container ensuring the initial admin exists with the Secret's password. */}}
 {{- define "velociraptor.adminInitContainer" -}}
 {{- if .Values.gui.initialAdmin.enabled }}

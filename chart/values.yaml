@@ -466,6 +466,31 @@ serviceMonitor:
   path: /metrics
   scheme: http
 
+## Orgs (multi-tenancy). Each org has its own clients, hunts, users and client config
+## (own nonce), on the same server. Declarative: a native sidecar of the master (needs
+## Kubernetes >= 1.29) creates the listed orgs that don't exist yet and grants
+## gui.initialAdmin the administrator role in them, through the server API, every
+## reconcilePeriodSeconds. It never renames or deletes an org (do that in the GUI).
+## Why not GUI.initial_orgs: it is only applied on the server's very first start, and
+## org_create() refuses to run offline — so orgs must be created through the live API.
+## The sidecar authenticates with an API client certificate issued at each pod start
+## (API user "velociraptor-helm", administrator role) and kept in memory only.
+## Per-org client config (`config client --org` returns an empty nonce offline):
+##   kubectl exec <fullname>-0 -c velociraptor -- /velociraptor --config <config.mountPath> \
+##     query --format=jsonl "SELECT _client_config FROM orgs() WHERE OrgId = '<id>'" | jq -r ._client_config
+orgs:
+  items: []
+  #  - id: O01
+  #    name: "Customer A"
+  reconcilePeriodSeconds: 60
+  # Idle loop ~48Mi + a short-lived API client ~48Mi at each period.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+
 # Custom VQL artifact definitions, mounted read-only and loaded by the server.
 # When enabled, the chart injects `defaults.artifact_definitions_directories`
 # into the config (via the overlay merge) so Velociraptor reads `path`.

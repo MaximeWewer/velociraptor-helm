@@ -37,10 +37,11 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- $init := include "velociraptor.overlayInitContainer" . }}
+      {{- /* Order matters: merge the config, create the admin, then the orgs API client + sidecar. */}}
+      {{- $init := printf "%s\n%s\n%s" (include "velociraptor.overlayInitContainer" .) (include "velociraptor.adminInitContainer" .) (include "velociraptor.orgsInitContainers" .) }}
       {{- if trim $init }}
       initContainers:
-        {{- $init | nindent 8 }}
+        {{- trim $init | nindent 8 }}
       {{- end }}
       containers:
         - name: velociraptor
@@ -106,6 +107,16 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.tmpDir.sizeLimit }}
+        {{- end }}
+        {{- if .Values.orgs.items }}
+        # API client certificate of the orgs reconciler: memory only, gone with the pod.
+        - name: api-client
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: orgs-tmp
+          emptyDir:
+            sizeLimit: 64Mi
         {{- end }}
         {{- if or (not .Values.persistence.enabled) .Values.persistence.existingClaim }}
         - name: datastore

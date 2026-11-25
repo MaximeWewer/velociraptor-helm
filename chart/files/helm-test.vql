@@ -9,12 +9,23 @@
 LET probe(target, creds) = SELECT Response FROM http_client(url=target, skip_verify=TRUE,
     headers=if(condition=creds, then=dict(Authorization="Basic " + base64encode(string=creds)), else=dict()))
 
+-- Retry for up to ~1 min: right after install, a new pod's traffic can be briefly unroutable
+-- (Service endpoints, NetworkPolicy programming) and the GUI gateway may still be connecting.
+-- Returns the first expected answer, else the last one.
+LET retry(target, creds, want, tries) = SELECT Response, N FROM foreach(row={SELECT _value FROM range(end=tries)},
+    query={SELECT Response, _value AS N,
+                  if(condition=Response != want AND _value < tries - 1, then=sleep(time=5)) AS Slept
+           FROM probe(target=target, creds=creds)})
+  WHERE Response = want OR N = tries - 1
+  LIMIT 1
+
 -- Materialize (LET <=): indexing a stored-query call directly yields NULL.
-LET F <= probe(target=FrontendURL + "/server.pem", creds="")
 LET Basic <= GuiAuth = "basic" AND AdminUser
-LET G <= probe(target=GuiURL + "/api/v1/GetUserUITraits",
-             creds=if(condition=Basic, then=AdminUser + ":" + AdminPassword, else=""))
 LET Expected <= if(condition=Basic, then=200, else=401)
+LET F <= retry(target=FrontendURL + "/server.pem", creds="", want=200, tries=12)
+LET G <= retry(target=GuiURL + "/api/v1/GetUserUITraits",
+             creds=if(condition=Basic, then=AdminUser + ":" + AdminPassword, else=""),
+             want=Expected, tries=12)
 
 LET _e1 <= if(condition=F[0].Response != 200,
               then=log(level="ERROR", message="frontend %v/server.pem -> HTTP %v", args=[FrontendURL, F[0].Response]))

@@ -24,7 +24,7 @@
 
   Inputs (--env): Bin, ApiConfig, Orgs, Admin, ApiClients, State (JSON, prepared by the chart),
   Period (seconds), ManagedOrgs (JSON list of non-root org ids), ApiUser (this sidecar's API
-  user); client config export: ExportOrgs (JSON list of org ids, "[]" = off),
+  user), LedgerFile (server-side path of the API client ledger, see below); client config export: ExportOrgs (JSON list of org ids, "[]" = off),
   ExportPrefix, ExportKey, Packages ("true"/"false"), Release, KubeAPI, SADir.
 */
 
@@ -33,6 +33,27 @@ LET Wanted <= parse_json_array(data=Orgs)
 LET Existing <= SELECT OrgId FROM orgs()
 LET Missing <= SELECT id, name FROM foreach(row=Wanted) WHERE NOT (id in Existing.OrgId)
 LET Clients <= parse_json_array(data=ApiClients)
+
+-- API client revocation. Velociraptor authenticates an API client by CA signature + CN only
+-- (no revocation list), so a certificate stays usable as long as its user exists. A ledger in
+-- the datastore (next to the users it describes) records the API clients ever declared:
+--   - a client removed from (or renamed in) apiClients is revoked: its user is deleted;
+--   - a revoked name stays revoked: re-declaring it would revive every certificate issued
+--     under it, so it is refused (not granted) until removed from the ledger by hand.
+LET Declared <= if(condition=Clients, then=Clients.name, else=[])
+LET Ledger <= if(condition=LedgerFile, then=parse_json(data=read_file(filename=LedgerFile)))
+LET PrevIssued <= if(condition=Ledger.issued, then=Ledger.issued, else=[])
+LET PrevRevoked <= if(condition=Ledger.revoked, then=Ledger.revoked, else=[])
+LET NewlyRevoked <= filter(list=PrevIssued, condition="x => NOT x in Declared AND NOT x in PrevRevoked")
+LET Revoked <= PrevRevoked + NewlyRevoked
+LET Refused <= filter(list=Declared, condition="x => x in Revoked")
+LET Active <= filter(list=Declared, condition="x => NOT x in Revoked")
+LET RevokedUsers <= SELECT _value AS name, user_delete(user=_value, really_do_it=TRUE) AS Deleted
+  FROM foreach(row=Revoked) WHERE user(user=_value).name
+LET NewLedger <= serialize(format="json", item=dict(issued=Active, revoked=Revoked))
+LET LedgerWritten <= if(condition=LedgerFile AND NewLedger != serialize(format="json",
+                            item=dict(issued=PrevIssued, revoked=PrevRevoked)),
+    then=copy(accessor="data", filename=NewLedger, dest=LedgerFile))
 LET States <= parse_json_array(data=State)
 
 -- Materialized in this order: create the orgs, then grant ourselves (the reconciler's own API
@@ -57,7 +78,7 @@ LET lastHunt(htag) = SELECT create_time FROM hunts() WHERE htag in tags
 -- Applied inside query(org_id=...): every call below acts on that org.
 LET applyOrg = SELECT
     { SELECT name, setRoles(name=name, roles=roles, orgs=[OrgId], policy=policy) AS Granted
-      FROM foreach(row=UserList) } AS Users,
+      FROM foreach(row=UserList) WHERE NOT name in RevokedNames } AS Users,
     if(condition=ClientMonitoring,
        then=set_client_monitoring(value=parse_json(data=ClientMonitoring)).version) AS ClientMonitoring,
     if(condition=ServerMonitoring,
@@ -87,7 +108,8 @@ SELECT Wanted.id AS Declared, CreatedOrgs AS Created, SelfGranted,
        if(condition=Admin AND Wanted,
           then=user_grant(user=Admin, roles=["administrator"], orgs=Wanted.id)) AS AdminGranted,
        { SELECT name, roles, orgs, setRoles(name=name, roles=roles, orgs=orgs, policy=policy) AS Granted
-         FROM foreach(row=Clients) } AS ApiClients,
+         FROM foreach(row=Clients) WHERE name in Active } AS ApiClients,
+       RevokedUsers, Refused AS RefusedApiClients,
        { SELECT * FROM foreach(row=States, query={
            -- query() opens a fresh scope: copy the helper definitions into it.
            SELECT id AS Org, * FROM query(org_id=id, query=applyOrg,
@@ -95,7 +117,7 @@ SELECT Wanted.id AS Declared, CreatedOrgs AS Created, SelfGranted,
              -- the chart always provides these lists (possibly empty)
              OrgId=id, UserList=users, ClientMonitoring=clientMonitoring,
              ServerMonitoring=serverMonitoring, ToolList=tools, SecretList=secrets,
-             HuntList=hunts))
+             HuntList=hunts, RevokedNames=Revoked))
          }) } AS State
 FROM scope()
 '''
@@ -104,7 +126,8 @@ LET call(vql) = SELECT * FROM execve(
     argv=[Bin, "--api_config", ApiConfig, "--nobanner", "query", "--format=jsonl",
           "--env", "Orgs=" + Orgs, "--env", "Admin=" + Admin,
           "--env", "ApiClients=" + ApiClients, "--env", "State=" + State,
-          "--env", "ManagedOrgs=" + ManagedOrgs, "--env", "ApiUser=" + ApiUser, vql],
+          "--env", "ManagedOrgs=" + ManagedOrgs, "--env", "ApiUser=" + ApiUser,
+          "--env", "LedgerFile=" + LedgerFile, vql],
     sep="\x00\x00", length=2000000)
 
 /*

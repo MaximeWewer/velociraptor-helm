@@ -230,7 +230,8 @@ volumes:
 
 {{/* "true" when the API reconciler sidecar runs (orgs and/or API client roles to apply). */}}
 {{- define "velociraptor.reconcilerEnabled" -}}
-{{- if or .Values.orgs.items .Values.apiClients .Values.state.orgs .Values.clientConfig.export.enabled -}}true{{- end -}}
+{{- /* api.expose: keeps revoking removed API clients even once the list is empty. */ -}}
+{{- if or .Values.orgs.items .Values.apiClients .Values.state.orgs .Values.clientConfig.export.enabled .Values.api.expose.enabled -}}true{{- end -}}
 {{- end }}
 
 {{/* Org ids whose client config is exported (JSON list): clientConfig.export.orgs, or
@@ -431,6 +432,8 @@ volumes:
     - {{ printf "ManagedOrgs=%s" (include "velociraptor.managedOrgs" .) | quote }}
     - --env
     - ApiUser=velociraptor-helm
+    - --env
+    - LedgerFile={{ .Values.persistence.mountPath }}/helm-api-clients.json
     - --env
     - {{ printf "ExportOrgs=%s" (include "velociraptor.exportOrgs" .) | quote }}
     - --env

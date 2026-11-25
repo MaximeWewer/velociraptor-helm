@@ -276,12 +276,29 @@
         "extraRules": { "type": "array" }
       }
     },
+    "api": {
+      "type": "object",
+      "properties": {
+        "expose": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "allowedFrom": { "type": "array" }
+          }
+        },
+        "service": { "type": "object" }
+      }
+    },
+    "extraContainers": { "type": "array" },
+    "extraInitContainers": { "type": "array" },
+    "extraObjects": { "type": "array" },
     "customArtifacts": {
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
         "path": { "type": "string" },
         "existingConfigMap": { "type": "string" },
+        "existingConfigMaps": { "type": "array", "items": { "type": "string" } },
         "files": { "type": "object" }
       }
     },

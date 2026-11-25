@@ -1,0 +1,9 @@
+{{- /* Raw manifests rendered through tpl (strings or maps): anything the chart does not model. */}}
+{{- range .Values.extraObjects }}
+---
+{{- if typeIs "string" . }}
+{{ tpl . $ }}
+{{- else }}
+{{ tpl (toYaml .) $ }}
+{{- end }}
+{{- end }}

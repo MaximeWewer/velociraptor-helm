@@ -61,6 +61,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end }}
 
+{{/* "true" when the master API (gRPC) listens on 0.0.0.0 behind the <fullname>-api Service:
+     multi-frontend (minions) or api.expose (API clients outside the pod, e.g. Tracecat). */}}
+{{- define "velociraptor.apiServed" -}}
+{{- if or .Values.frontend.minions.enabled .Values.api.expose.enabled -}}true{{- end -}}
+{{- end }}
+
 {{/* Where the server config comes from: existingSecret | inline | bootstrap | none. */}}
 {{- define "velociraptor.configSource" -}}
 {{- if .Values.config.existingSecret -}}existingSecret
@@ -242,6 +248,7 @@ volumes:
   # start) and calls the API client every period, retrying until the API is up.
   restartPolicy: Always
   args:
+    - -v
     - --nobanner
     - query
     - --format=jsonl
@@ -407,8 +414,9 @@ over the raw maps. GUI authenticator / Frontend artifacts apply in legacy mode t
 {{- end -}}
 {{- if $manage -}}
   {{/* API */}}
-  {{- $api := dict "bind_address" (ternary "0.0.0.0" "127.0.0.1" .Values.frontend.minions.enabled) "bind_port" (.Values.frontend.apiPort | int) -}}
-  {{- if .Values.frontend.minions.enabled -}}
+  {{- $served := eq (include "velociraptor.apiServed" .) "true" -}}
+  {{- $api := dict "bind_address" (ternary "0.0.0.0" "127.0.0.1" $served) "bind_port" (.Values.frontend.apiPort | int) -}}
+  {{- if $served -}}
     {{- $_ := set $api "hostname" (printf "%s-api.%s.svc" (include "velociraptor.fullname" .) .Release.Namespace) -}}
     {{- $_ := set $api "pinned_gw_name" "GRPC_GW" -}}
   {{- end -}}
@@ -513,9 +521,23 @@ oauth_client_secret
 {{/* Custom-artifacts volumes (ConfigMap-backed). */}}
 {{- define "velociraptor.customArtifactsVolume" -}}
 {{- if .Values.customArtifacts.enabled }}
+{{- $ca := .Values.customArtifacts }}
+# Projected: every listed ConfigMap lands in the same directory (file names must be unique).
 - name: custom-artifacts
-  configMap:
-    name: {{ .Values.customArtifacts.existingConfigMap | default (printf "%s-custom-artifacts" (include "velociraptor.fullname" .)) }}
+  projected:
+    sources:
+      {{- if or $ca.files (and (not $ca.existingConfigMap) (not $ca.existingConfigMaps)) }}
+      - configMap:
+          name: {{ printf "%s-custom-artifacts" (include "velociraptor.fullname" .) }}
+      {{- end }}
+      {{- with $ca.existingConfigMap }}
+      - configMap:
+          name: {{ . }}
+      {{- end }}
+      {{- range $ca.existingConfigMaps }}
+      - configMap:
+          name: {{ tpl . $ }}
+      {{- end }}
 {{- end }}
 {{- if .Values.config.initializeServer }}
 - name: builtin-artifacts

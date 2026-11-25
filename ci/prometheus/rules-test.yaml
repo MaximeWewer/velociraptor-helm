@@ -85,3 +85,22 @@ tests:
             exp_annotations:
               summary: The Velociraptor identity Secret dfir/velociraptor-server-config is gone.
               description: "It holds the CA every agent pins. Restore it from backup BEFORE the next install/upgrade: otherwise a new CA is generated and every agent is orphaned."
+
+  # API reconciler sidecar restarting (persistent failure).
+  - interval: 5m
+    input_series:
+      - series: 'kube_pod_init_container_status_restarts_total{namespace="dfir",pod="velociraptor-0",container="orgs-reconciler"}'
+        values: '0 0 1 2 3 4 5 6 7 8 9 10 11 12'
+      - series: 'kube_pod_init_container_status_restarts_total{namespace="dfir",pod="velociraptor-0",container="config-merge"}'
+        values: '0 0 5 5 5 5 5 5 5 5 5 5 5 5'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VelociraptorReconcilerFailing
+        exp_alerts: []
+      - eval_time: 1h
+        alertname: VelociraptorReconcilerFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: dfir, pod: velociraptor-0, container: orgs-reconciler}
+            exp_annotations:
+              summary: The Velociraptor API reconciler of dfir/velociraptor keeps failing.
+              description: "Declared orgs/state are not applied. Read its logs: kubectl logs -n dfir velociraptor-0 -c orgs-reconciler"

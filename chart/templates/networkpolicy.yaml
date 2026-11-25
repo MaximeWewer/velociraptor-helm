@@ -42,12 +42,18 @@ spec:
           port: {{ .Values.gui.containerPort }}
         - protocol: TCP
           port: {{ .Values.frontend.containerPort }}
-    {{- if .Values.frontend.minions.enabled }}
-    # Multi-frontend: minions reach the master API (gRPC) for RemoteFileDataStore.
+    {{- if eq (include "velociraptor.apiServed" .) "true" }}
+    # Master API (gRPC): the release's own pods (master through its Service, minions for
+    # RemoteFileDataStore) and, with api.expose, the declared peers (e.g. Tracecat).
     - from:
         - podSelector:
             matchLabels:
               {{- include "velociraptor.selectorLabels" . | nindent 14 }}
+        {{- if .Values.api.expose.enabled }}
+        {{- with .Values.api.expose.allowedFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.frontend.apiPort }}
@@ -72,8 +78,8 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    {{- if .Values.frontend.minions.enabled }}
-    # Multi-frontend: minions (selected by this policy too) dial the master API (gRPC).
+    {{- if eq (include "velociraptor.apiServed" .) "true" }}
+    # Master API: minions, and API clients inside the master pod (through the Service), dial it.
     - to:
         - podSelector:
             matchLabels:

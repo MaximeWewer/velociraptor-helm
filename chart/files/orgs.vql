@@ -6,12 +6,15 @@
   ("not available when running without a frontend service"). Orgs must be created
   through the live server API.
 
-  How: this program runs in a native sidecar of the master and NEVER exits (a native
-  sidecar that crash-loops would delay the server's own start). Every Period seconds it
+  How: this program runs in a native sidecar of the master and does not exit on start-up
+  failures (a native sidecar that crash-loops would delay the server's own start). Every
+  Period seconds it
   runs `Inner` through the API client (`--api_config`, in-pod) to:
     - create the declared orgs that do not exist yet (never renames, never deletes);
     - grant the initial admin the administrator role in every declared org.
-  While the API is not up yet, attempts fail and are simply retried.
+  While the API is not up yet, attempts fail and are simply retried. After 5 failed attempts
+  the program exits non-zero: kubelet restarts the sidecar, and the PrometheusRule alert
+  VelociraptorReconcilerFailing fires on those restarts. Every attempt is logged.
 
   Inputs (--env): Bin, ApiConfig, Orgs (JSON array of {"id", "name"}), Admin (may be
   empty), Period (seconds).
@@ -33,7 +36,8 @@ LET call(vql) = SELECT * FROM execve(
           "--env", "Orgs=" + Orgs, "--env", "Admin=" + Admin, vql],
     sep="\x00\x00", length=10000000)
 
-LET attempt = SELECT timestamp(epoch=now()) AS Time,
+LET attempt = SELECT * FROM foreach(row={
+  SELECT timestamp(epoch=now()) AS Time,
        R[-1].ReturnCode = 0 AS OK,
        if(condition=R[-1].ReturnCode = 0,
           then=parse_json(data=join(array=R.Stdout, sep="")),
@@ -41,6 +45,19 @@ LET attempt = SELECT timestamp(epoch=now()) AS Time,
                              re='''(?s)^.*(velociraptor: error: [^\n]*).*$''', replace="$1")
                || "server API not reachable yet, will retry") AS Result
   FROM foreach(row={SELECT call(vql=Inner) AS R FROM scope()})
+}, query={
+  SELECT Time, OK, Result,
+         log(level=if(condition=OK, then="INFO", else="WARN"),
+             message="reconcile: %v", dedup=-1,
+             args=regex_replace(source=serialize(item=dict(OK=OK, Result=Result)),
+                                re='''\s*\n\s*''', replace=" ")) AS Logged
+  FROM scope()
+})
 
-SELECT * FROM foreach(row={SELECT * FROM clock(period=int(int=Period), start=0)},
-                      query=attempt)
+-- Only failed attempts reach the LIMIT: 5 failures end the loop.
+SELECT Time, Result FROM foreach(row={SELECT * FROM clock(period=int(int=Period), start=0)},
+                                 query=attempt)
+WHERE NOT OK
+LIMIT 5
+
+SELECT log(level="ERROR", message="reconcile: 5 failed attempts, exiting so that kubelet restarts the sidecar") FROM scope()

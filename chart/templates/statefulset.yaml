@@ -39,9 +39,14 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- /* Order matters: merge the config, create the admin, then the orgs API client + sidecar. */}}
       {{- $init := printf "%s\n%s\n%s" (include "velociraptor.overlayInitContainer" .) (include "velociraptor.adminInitContainer" .) (include "velociraptor.orgsInitContainers" .) }}
-      {{- if trim $init }}
+      {{- if or (trim $init) .Values.extraInitContainers }}
       initContainers:
-        {{- trim $init | nindent 8 }}
+        {{- with trim $init }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.extraInitContainers }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+        {{- end }}
       {{- end }}
       containers:
         - name: velociraptor
@@ -62,7 +67,7 @@ spec:
             - name: gui
               containerPort: {{ .Values.gui.containerPort }}
               protocol: TCP
-            {{- if .Values.frontend.minions.enabled }}
+            {{- if eq (include "velociraptor.apiServed" .) "true" }}
             - name: api
               containerPort: {{ .Values.frontend.apiPort }}
               protocol: TCP
@@ -100,6 +105,9 @@ spec:
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+        {{- end }}
       volumes:
         {{- include "velociraptor.configVolumes" . | nindent 8 }}
         {{- include "velociraptor.customArtifactsVolume" . | nindent 8 }}

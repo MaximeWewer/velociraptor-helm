@@ -190,6 +190,24 @@ helm upgrade velociraptor . -n dfir \
 
 OIDC discovery is fetched at server start: with `networkPolicy.enabled`, list the IdP in `networkPolicy.oidcEgressCIDRs`.
 
+## Server API (`api.expose`)
+
+`api.expose.enabled` makes the master API (gRPC, mutual TLS) listen on `0.0.0.0` behind the
+`<fullname>-api` Service, so API clients outside the pod (Tracecat, scripts, Grafana) can reach
+it. The NetworkPolicy only admits the release's own pods and `api.expose.allowedFrom` peers.
+`API.hostname` is set to the Service DNS name; clients verify the server by its pinned
+certificate name (`GRPC_GW`), not by DNS. API clients authenticate with certificates signed by
+the server CA (see `apiClients`).
+
+## Extension points
+
+- `extraObjects`: raw manifests (maps or strings) rendered through `tpl`, e.g. a responder
+  Deployment or an ExternalSecret, without a new chart release.
+- `extraContainers` / `extraInitContainers`: added to the master pod (through `tpl`); init
+  containers run after the chart's own.
+- `customArtifacts.existingConfigMaps`: several ConfigMaps (names through `tpl`) projected into
+  one artifact directory with `customArtifacts.files` (file names must be unique).
+
 ## Monitoring & alerting
 
 - `serviceMonitor.enabled`: scrapes the master **and the minions** (with multi-frontend, agents are spread over all frontends). `Monitoring.bind_address` is set to `0.0.0.0` when the chart manages the config.
@@ -202,6 +220,7 @@ OIDC discovery is fetched at server start: with `networkPolicy.enabled`, list th
 | `VelociraptorFrontendLoadShedding` | warning | the frontend rejects connections for 15m |
 | `VelociraptorMasterNotReady` | critical | the master is not Ready for 10m |
 | `VelociraptorCertificateCheckFailing` | warning | the certificate CronJob failed / stopped succeeding (see below) |
+| `VelociraptorReconcilerFailing` | warning | the API reconciler sidecar restarted at least twice in 1h (it exits after 5 failed attempts) |
 | `VelociraptorIdentitySecretMissing` | critical | the identity Secret (bootstrap) disappeared - restore it before the next upgrade |
 
 Velociraptor exports no certificate-expiry metric, so the **certificate CronJob is the probe**: in bootstrap mode it renews; with `existingSecret` / `inline` it runs **read-only** (`CheckOnly`) and fails when the server certificates expire within `renewBeforeDays` - nothing renews a config managed outside the chart. In every mode it fails when the CA expires within `config.bootstrap.caWarnDays` (180). The rules are unit-tested with `promtool` (`ci/test-alert-rules.sh`).
@@ -240,6 +259,9 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 | `gui.initialAdmin.existingSecret` | `""` | Password Secret; empty → generated into `<fullname>-admin` |
 | `orgs.items` | `[]` | Declared orgs, reconciled through the API (never deleted) |
 | `customArtifacts.enabled` | `false` | Mount custom VQL artifacts (ConfigMap) at `customArtifacts.path` and load them |
+| `customArtifacts.existingConfigMaps` | `[]` | Extra artifact ConfigMaps projected into the same directory |
+| `api.expose.enabled` / `api.expose.allowedFrom` | `false` / `[]` | Serve the API on the `<fullname>-api` Service to the declared peers |
+| `extraObjects` / `extraContainers` / `extraInitContainers` | `[]` | Escape hatches (rendered through `tpl`) |
 | `frontend.minions.enabled` | `false` | Multi-frontend (master/minion); requires a RWX `persistence.existingClaim` |
 | `frontend.service.type` | `LoadBalancer` | Frontend exposure (endpoint clients) |
 | `frontend.ingress.enabled` | `false` | SSL-passthrough Ingress for agent comms (L4 TLS by SNI; needs nginx `--enable-ssl-passthrough`) |

@@ -87,6 +87,18 @@ spec:
               Read the logs of the last {{ $fullName }}-pki-renew Job: server certificates or the
               CA expire soon, or the renewal failed.
         {{- end }}
+        - alert: VelociraptorReconcilerFailing
+          # The API reconciler sidecar exits after 5 failed attempts (it does
+          # not exit on start-up failures), so restarts mean the declared state is not applied.
+          expr: |
+            increase(kube_pod_init_container_status_restarts_total{namespace="{{ $ns }}", pod=~"{{ $fullName }}-[0-9]+", container=~"orgs-reconciler|state-reconciler"}[1h]) >= 2
+          labels:
+            severity: warning
+          annotations:
+            summary: The Velociraptor API reconciler of {{ $ns }}/{{ $fullName }} keeps failing.
+            description: >-
+              Declared orgs/state are not applied. Read its logs:
+              kubectl logs -n {{ $ns }} {{ $fullName }}-0 -c {{ "{{" }} $labels.container {{ "}}" }}
         {{- if eq (include "velociraptor.configSource" .) "bootstrap" }}
         - alert: VelociraptorIdentitySecretMissing
           expr: absent(kube_secret_info{namespace="{{ $ns }}", secret="{{ include "velociraptor.bootstrapSecretName" . }}"})

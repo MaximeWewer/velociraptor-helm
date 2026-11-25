@@ -1,4 +1,5 @@
-{{- if and .Values.customArtifacts.enabled (not .Values.customArtifacts.existingConfigMap) }}
+{{- $ca := .Values.customArtifacts }}
+{{- if and $ca.enabled (or $ca.files (and (not $ca.existingConfigMap) (not $ca.existingConfigMaps))) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -262,6 +262,20 @@ frontend:
     tolerations: []
     affinity: {}
 
+## Master API (gRPC, mutual TLS with API client certificates).
+## api.expose: listen on 0.0.0.0 behind the <fullname>-api Service so API clients outside the
+## master pod (Tracecat, scripts, Grafana) can reach it. Requires the chart to manage the
+## config (bootstrap / config.manageServerConfig), otherwise set API.bind_address yourself.
+## API clients authenticate with a certificate signed by the server CA (see apiClients).
+api:
+  expose:
+    enabled: false
+    # Peers allowed by the NetworkPolicy (standard NetworkPolicyPeer list), e.g.
+    #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tracecat}}
+    allowedFrom: []
+  service:
+    annotations: {}
+
 ## GUI = admin web UI. Keep internal / behind VPN or authenticated Ingress.
 gui:
   containerPort: 8889
@@ -524,8 +538,11 @@ orgs:
 customArtifacts:
   enabled: false
   path: /custom_artifacts
-  # Use an existing ConfigMap (keys = *.yaml artifact files). Takes precedence
-  # over `files`.
+  # Existing ConfigMaps (keys = *.yaml artifact files; names rendered through tpl). All of
+  # them, plus `files` when set, are projected into `path` (file names must be unique across
+  # them): e.g. a framework's artifacts ConfigMap + your local ones, without merging by hand.
+  existingConfigMaps: []
+  # Single existing ConfigMap (kept for compatibility; same as one existingConfigMaps entry).
   existingConfigMap: ""
   # Inline artifacts: map of filename -> YAML content (chart-managed ConfigMap).
   files: {}
@@ -544,3 +561,10 @@ extraEnv: []
 extraVolumes: []
 extraVolumeMounts: []
 extraArgs: []
+# Extra containers / init containers of the master pod (rendered through tpl). Init
+# containers run after the chart's own (config merge, admin, orgs).
+extraContainers: []
+extraInitContainers: []
+# Extra raw manifests (maps or strings, rendered through tpl), e.g. a responder Deployment
+# or an ExternalSecret.
+extraObjects: []

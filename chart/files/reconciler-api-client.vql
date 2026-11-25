@@ -1,0 +1,20 @@
+/*
+  velociraptor-helm - issue the reconciler's in-memory API client certificate.
+
+  `config api_client` writes the connection string from API.hostname, i.e. the API Service
+  when api.expose / minions are on. The reconciler runs in the master pod: rewrite it to the
+  loopback, so it never hairpins through its own Service (some CNIs masquerade hairpin
+  traffic, which the NetworkPolicy then drops).
+  Inputs (--env): Config, Out, Port.
+*/
+LET R <= SELECT * FROM execve(
+    argv=["/velociraptor", "--nobanner", "--config", Config, "config", "api_client",
+          "--name", "velociraptor-helm", "--role", "administrator", Out],
+    sep="\x00\x00", length=1000000)
+LET _e1 <= if(condition=R[-1].ReturnCode != 0,
+    then=log(level="ERROR", message="api_client failed: %v", args=join(array=R.Stderr, sep="")))
+LET Fixed <= regex_replace(source=read_file(filename=Out),
+    re="api_connection_string: .*", replace="api_connection_string: 127.0.0.1:" + Port)
+LET _e2 <= if(condition=NOT Fixed =~ "api_connection_string: 127.0.0.1:",
+    then=log(level="ERROR", message="api_client: no connection string in %v", args=Out))
+SELECT copy(accessor="data", filename=Fixed, dest=Out) AS Written FROM scope() WHERE Fixed

@@ -342,17 +342,20 @@ volumes:
 - name: reconciler-api-client
   image: {{ include "velociraptor.image" . }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
+  # Issues the certificate and pins the connection to 127.0.0.1 (see the VQL).
   args:
+    - --nobanner
     - --config
     - {{ .Values.config.mountPath }}
-    - --nobanner
-    - config
-    - api_client
-    - --name
-    - velociraptor-helm
-    - --role
-    - administrator
-    - /api/api.yaml
+    - query
+    - --format=jsonl
+    - --env
+    - Config={{ .Values.config.mountPath }}
+    - --env
+    - Out=/api/api.yaml
+    - --env
+    - Port={{ .Values.frontend.apiPort }}
+    - {{ .Files.Get "files/reconciler-api-client.vql" | toJson }}
   securityContext:
     {{- toYaml .Values.securityContext | nindent 4 }}
   volumeMounts:

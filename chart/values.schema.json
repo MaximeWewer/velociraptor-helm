@@ -289,6 +289,20 @@
         "service": { "type": "object" }
       }
     },
+    "apiClients": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "roles"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9._@-]+$" },
+          "roles": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "orgs": { "type": "array", "items": { "type": "string" } },
+          "secretName": { "type": "string" },
+          "secretKey": { "type": "string" }
+        }
+      }
+    },
     "extraContainers": { "type": "array" },
     "extraInitContainers": { "type": "array" },
     "extraObjects": { "type": "array" },

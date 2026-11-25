@@ -42,9 +42,12 @@ rules:
       {{- if $adminGenerated }}
       - {{ include "velociraptor.adminSecretName" . }}
       {{- end }}
-      {{- if and (not $bootstrap) (eq (include "velociraptor.pkiCronEnabled" .) "true") }}
-      # read-only certificate expiry check of a config managed outside the chart
+      {{- if and (not $bootstrap) (or (eq (include "velociraptor.pkiCronEnabled" .) "true") .Values.apiClients) }}
+      # read-only: certificate expiry check / API client signing of a config managed outside the chart
       - {{ include "velociraptor.configSecretName" . }}
+      {{- end }}
+      {{- range (include "velociraptor.apiClientsPki" . | fromJsonArray) }}
+      - {{ .secret }}
       {{- end }}
     verbs: ["get", "patch"]
   - apiGroups: [""]

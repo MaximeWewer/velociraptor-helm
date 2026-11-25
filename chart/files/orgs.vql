@@ -17,23 +17,31 @@
   VelociraptorReconcilerFailing fires on those restarts. Every attempt is logged.
 
   Inputs (--env): Bin, ApiConfig, Orgs (JSON array of {"id", "name"}), Admin (may be
-  empty), Period (seconds).
+  empty), ApiClients (JSON array of {"name", "roles", "orgs"}), Period (seconds).
 */
 
 LET Inner = '''
 LET Wanted <= parse_json_array(data=Orgs)
 LET Existing <= SELECT OrgId FROM orgs()
 LET Missing <= SELECT id, name FROM foreach(row=Wanted) WHERE NOT (id in Existing.OrgId)
+LET Clients <= parse_json_array(data=ApiClients)
 SELECT Wanted.id AS Declared,
        { SELECT id, org_create(name=name, org_id=id).id AS OrgId FROM Missing } AS Created,
-       if(condition=Admin,
-          then=user_grant(user=Admin, roles=["administrator"], orgs=Wanted.id)) AS AdminGranted
+       if(condition=Admin AND Wanted,
+          then=user_grant(user=Admin, roles=["administrator"], orgs=Wanted.id)) AS AdminGranted,
+       { SELECT name, roles, orgs,
+                -- user_grant replaces the roles (authoritative) but needs an existing user
+                if(condition=user(user=name).name,
+                   then=user_grant(user=name, roles=roles, orgs=orgs),
+                   else=user_create(user=name, roles=roles, orgs=orgs)) AS Granted
+         FROM foreach(row=Clients) } AS ApiClients
 FROM scope()
 '''
 
 LET call(vql) = SELECT * FROM execve(
     argv=[Bin, "--api_config", ApiConfig, "--nobanner", "query", "--format=jsonl",
-          "--env", "Orgs=" + Orgs, "--env", "Admin=" + Admin, vql],
+          "--env", "Orgs=" + Orgs, "--env", "Admin=" + Admin,
+          "--env", "ApiClients=" + ApiClients, vql],
     sep="\x00\x00", length=10000000)
 
 LET attempt = SELECT * FROM foreach(row={

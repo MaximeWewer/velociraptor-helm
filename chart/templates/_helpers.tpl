@@ -100,7 +100,25 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* "true" when the PKI hook Job must run: bootstrap mode, or an admin password to generate. */}}
 {{- define "velociraptor.pkiJobEnabled" -}}
-{{- if or (eq (include "velociraptor.configSource" .) "bootstrap") (and .Values.gui.initialAdmin.enabled (not .Values.gui.initialAdmin.existingSecret)) -}}true{{- end -}}
+{{- if or (eq (include "velociraptor.configSource" .) "bootstrap") (and .Values.gui.initialAdmin.enabled (not .Values.gui.initialAdmin.existingSecret)) (and .Values.apiClients (ne (include "velociraptor.configSource" .) "none")) -}}true{{- end -}}
+{{- end }}
+
+{{/* API clients as the PKI job sees them: [{name, secret, key}]. */}}
+{{- define "velociraptor.apiClientsPki" -}}
+{{- $out := list -}}
+{{- range .Values.apiClients -}}
+{{- $out = append $out (dict "name" .name "secret" (.secretName | default (printf "%s-api-%s" (include "velociraptor.fullname" $) .name)) "key" (.secretKey | default "api.config.yaml")) -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end }}
+
+{{/* host:port API clients dial: the API Service when it is served, else in-pod loopback. */}}
+{{- define "velociraptor.apiConnection" -}}
+{{- if eq (include "velociraptor.apiServed" .) "true" -}}
+{{- printf "%s-api.%s.svc:%v" (include "velociraptor.fullname" .) .Release.Namespace .Values.frontend.apiPort -}}
+{{- else -}}
+{{- printf "127.0.0.1:%v" .Values.frontend.apiPort -}}
+{{- end -}}
 {{- end }}
 
 {{/* "true" when the certificate CronJob runs: renew (bootstrap) or check read-only (existingSecret / inline). */}}
@@ -184,6 +202,12 @@ containers:
       - Context={{ ternary "cron" "hook" $cron }}
       - --env
       - CAWarnDays={{ $bs.caWarnDays }}
+      - --env
+      - {{ printf "ApiClients=%s" (include "velociraptor.apiClientsPki" .) | quote }}
+      - --env
+      - ApiConnection={{ include "velociraptor.apiConnection" . }}
+      - --env
+      - ConfigSecret={{ if ne (include "velociraptor.configSource" .) "bootstrap" }}{{ include "velociraptor.configSecretName" . }}{{ end }}
       - {{ .Files.Get "files/pki.vql" | toJson }}
     securityContext:
       {{- toYaml .Values.securityContext | nindent 6 }}
@@ -204,12 +228,29 @@ volumes:
 {{- end }}
 {{- end }}
 
+{{/* "true" when the API reconciler sidecar runs (orgs and/or API client roles to apply). */}}
+{{- define "velociraptor.reconcilerEnabled" -}}
+{{- if or .Values.orgs.items .Values.apiClients -}}true{{- end -}}
+{{- end }}
+
+{{/* API clients as the reconciler sees them: [{name, roles, orgs}]. */}}
+{{- define "velociraptor.apiClientsGrants" -}}
+{{- $out := list -}}
+{{- range .Values.apiClients -}}
+{{- $out = append $out (dict "name" .name "roles" .roles "orgs" (.orgs | default (list "root"))) -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end }}
+
 {{/* Orgs: an init container issues an in-memory API client certificate (offline), then a
      native sidecar reconciles the declared orgs through the live API (chart/files/orgs.vql). */}}
 {{- define "velociraptor.orgsInitContainers" -}}
-{{- if .Values.orgs.items }}
+{{- if eq (include "velociraptor.reconcilerEnabled" .) "true" }}
 {{- if not (semverCompare ">=1.29.0-0" .Capabilities.KubeVersion.Version) }}
-{{- fail "orgs.items needs Kubernetes >= 1.29 (native sidecar containers)." }}
+{{- fail "orgs.items / apiClients need Kubernetes >= 1.29 (native sidecar containers)." }}
+{{- end }}
+{{- range .Values.apiClients }}
+{{- if not (and .name .roles) }}{{ fail "each apiClients[] entry needs a name and roles" }}{{ end }}
 {{- end }}
 {{- range .Values.orgs.items }}
 {{- if not (and .id .name) }}{{ fail "each orgs.items[] entry needs an id and a name" }}{{ end }}
@@ -258,6 +299,8 @@ volumes:
     - ApiConfig=/api/api.yaml
     - --env
     - {{ printf "Orgs=%s" (toJson .Values.orgs.items) | quote }}
+    - --env
+    - {{ printf "ApiClients=%s" (include "velociraptor.apiClientsGrants" .) | quote }}
     - --env
     - Admin={{ if .Values.gui.initialAdmin.enabled }}{{ .Values.gui.initialAdmin.username }}{{ end }}
     - --env

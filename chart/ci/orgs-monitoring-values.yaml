@@ -15,3 +15,9 @@ resources:
 orgs:
   items:
     - {id: O01, name: "CI org"}
+api:
+  expose:
+    enabled: true
+apiClients:
+  - name: ci-client
+    roles: [api, reader]

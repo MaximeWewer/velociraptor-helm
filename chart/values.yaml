@@ -276,6 +276,22 @@ api:
   service:
     annotations: {}
 
+## API clients: one certificate per entry, written to a Secret (keys: api.config.yaml, the
+## `velociraptor --api_config` file; ca.crt, tls.crt, tls.key, endpoint for other gRPC
+## clients). Issued by the PKI job when the Secret is missing (delete it to rotate) and
+## re-issued when it expires within config.bootstrap.renewBeforeDays (certificates take the
+## server config's certificate validity: config.bootstrap.certificateValidityDays in bootstrap
+## mode, 1 year for a raw `config generate`; consumers must reload the Secret on renewal). The reconciler sidecar grants `roles` in `orgs` through
+## the API: the roles declared here are authoritative for these users. Include `api` (needed
+## to use the API) and the least privileges required, e.g. [api, investigator]; avoid
+## administrator. Out-of-pod clients also need api.expose.
+apiClients: []
+#  - name: tracecat              # API user (certificate CN)
+#    roles: [api, investigator]
+#    orgs: [root]                # default [root]
+#    secretName: ""              # default <fullname>-api-<name>
+#    secretKey: api.config.yaml
+
 ## GUI = admin web UI. Keep internal / behind VPN or authenticated Ingress.
 gui:
   containerPort: 8889

@@ -199,6 +199,30 @@ it. The NetworkPolicy only admits the release's own pods and `api.expose.allowed
 certificate name (`GRPC_GW`), not by DNS. API clients authenticate with certificates signed by
 the server CA (see `apiClients`).
 
+## API clients (`apiClients`)
+
+```yaml
+api:
+  expose:
+    enabled: true
+    allowedFrom:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tracecat}}
+apiClients:
+  - name: tracecat
+    roles: [api, investigator]   # `api` is required to use the API; least privilege
+    orgs: [root]
+```
+
+- The PKI job signs one certificate per client with the server CA (no datastore access
+  needed) and writes `<fullname>-api-<name>`: `api.config.yaml` (for
+  `velociraptor --api_config`), `ca.crt`, `tls.crt`, `tls.key`, `endpoint`
+  (`<fullname>-api.<ns>.svc:<port>`). Copy or sync it to the consumer's namespace.
+- **Rotate**: delete the Secret; the next install/upgrade/sync or CronJob run re-issues it.
+  **Renewal**: re-issued when it expires within `renewBeforeDays` (same validity as the server
+  certificates); consumers must reload it.
+- The reconciler sidecar grants `roles` in `orgs` through the API: the declared roles are
+  authoritative for these users (a role removed here is revoked).
+
 ## Extension points
 
 - `extraObjects`: raw manifests (maps or strings) rendered through `tpl`, e.g. a responder
@@ -261,6 +285,7 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 | `customArtifacts.enabled` | `false` | Mount custom VQL artifacts (ConfigMap) at `customArtifacts.path` and load them |
 | `customArtifacts.existingConfigMaps` | `[]` | Extra artifact ConfigMaps projected into the same directory |
 | `api.expose.enabled` / `api.expose.allowedFrom` | `false` / `[]` | Serve the API on the `<fullname>-api` Service to the declared peers |
+| `apiClients` | `[]` | API client certificates (Secrets) + roles granted through the API |
 | `extraObjects` / `extraContainers` / `extraInitContainers` | `[]` | Escape hatches (rendered through `tpl`) |
 | `frontend.minions.enabled` | `false` | Multi-frontend (master/minion); requires a RWX `persistence.existingClaim` |
 | `frontend.service.type` | `LoadBalancer` | Frontend exposure (endpoint clients) |

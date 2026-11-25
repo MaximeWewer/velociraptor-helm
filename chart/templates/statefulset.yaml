@@ -116,7 +116,7 @@ spec:
           emptyDir:
             sizeLimit: {{ .Values.tmpDir.sizeLimit }}
         {{- end }}
-        {{- if .Values.orgs.items }}
+        {{- if eq (include "velociraptor.reconcilerEnabled" .) "true" }}
         # API client certificate of the orgs reconciler: memory only, gone with the pod.
         - name: api-client
           emptyDir:

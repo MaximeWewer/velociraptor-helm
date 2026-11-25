@@ -5,7 +5,8 @@
 #
 #   A  bootstrap install: identity + admin generated, helm test passes, an agent enrolls
 #   B  idempotent upgrade: same CA
-#   C  orgs: the sidecar creates the declared org through the API
+#   C  orgs + API clients: the sidecar creates the org and grants the client's roles through
+#      the API; the client certificate Secret works for a real API query
 #   D  forced certificate renewal: same CA, new certificate served, server restarted
 #   E  uninstall + reinstall: identity Secret kept, same CA
 #   F  existingSecret + read-only CronJob check: fails when certificates expire soon
@@ -119,11 +120,21 @@ install $NS_A
 check "same CA after upgrade" test "$(ca_hash $NS_A)" = "$CA0"
 check "same server certificate after upgrade" test "$(fe_cert $NS_A)" = "$FE0"
 
-log "C. orgs through the API"
-install $NS_A --set 'orgs.items[0].id=O01' --set 'orgs.items[0].name=E2E org' --set orgs.reconcilePeriodSeconds=15
-orgs_ok() { for _ in $(seq 1 24); do kubectl logs -n $NS_A $REL-0 -c orgs-reconciler 2>/dev/null | grep -q '"OK":true' && return 0; sleep 5; done; return 1; }
+log "C. orgs and API clients through the API"
+install $NS_A --set 'orgs.items[0].id=O01' --set 'orgs.items[0].name=E2E org' --set orgs.reconcilePeriodSeconds=15 \
+  --set api.expose.enabled=true --set 'apiClients[0].name=e2e-client' --set 'apiClients[0].roles={api,reader}'
+orgs_ok() { for _ in $(seq 1 24); do kubectl logs -n $NS_A $REL-0 -c orgs-reconciler 2>/dev/null | grep -q '"Granted": "e2e-client"' && return 0; sleep 5; done; return 1; }
 check "org O01 reconciled" orgs_ok
 check "org O01 exists" bash -c "kubectl exec -n $NS_A $REL-0 -c velociraptor -- /velociraptor --nobanner --config /etc/velociraptor/server.config.yaml query --format=jsonl \"SELECT OrgId FROM orgs()\" 2>/dev/null | grep -q O01"
+
+check "API client Secret issued" test "$(kubectl get secret $REL-api-e2e-client -n $NS_A -o jsonpath='{.data}' | jq -r 'keys|join(",")')" = "api.config.yaml,ca.crt,endpoint,tls.crt,tls.key"
+api_query() {  # a pod of the release (allowed by the NetworkPolicy) using the client Secret
+  kubectl run "apic-$RANDOM" -n $NS_A --rm -i --restart=Never --quiet \
+    --labels="app.kubernetes.io/name=velociraptor,app.kubernetes.io/instance=$REL" \
+    --image="$(helm get values "$REL" -n $NS_A -a -o json | jq -r '.image.registry + "/" + .image.repository + ":" + .image.tag')" \
+    --overrides='{"spec":{"containers":[{"name":"c","image":"'"$(helm get values "$REL" -n $NS_A -a -o json | jq -r '.image.registry + "/" + .image.repository + ":" + .image.tag')"'","args":["--api_config","/s/api.config.yaml","--nobanner","query","--format=jsonl","SELECT user(user=\"e2e-client\").roles AS Roles FROM scope()"],"volumeMounts":[{"name":"s","mountPath":"/s"}]}],"volumes":[{"name":"s","secret":{"secretName":"'"$REL"'-api-e2e-client"}}]}}' 2>/dev/null | grep -q '"Roles":\["api","reader"\]'
+}
+check "API client queries the server with its granted roles" api_query
 
 log "D. forced certificate renewal"
 POD0=$(kubectl get pod $REL-0 -n $NS_A -o jsonpath='{.metadata.uid}')

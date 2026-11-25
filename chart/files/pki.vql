@@ -13,6 +13,7 @@
      `config reissue_certs` (same CA, same private keys, same nonces -> transparent for
      agents), then optionally delete the server pods so they load the new certificates.
   3. Ensure the initial-admin password Secret exists (random) when AdminSecretName is set.
+  4. Issue / renew the API client certificates (one Secret per declared API client).
 
   CheckOnly=true (renewal CronJob for a config managed OUTSIDE the chart: existingSecret /
   inline): read-only. Never imports, generates, writes or restarts anything; FAILS when a
@@ -25,7 +26,9 @@
 
   Inputs (--env): Bin, WorkDir, KubeAPI, SADir, Release, SecretName, SecretKey,
   ImportFrom, ValidityDays, RenewBeforeDays, RestartOnRenew, PodSelector,
-  AdminSecretName, AdminPasswordKey, CheckOnly, Context, CAWarnDays.
+  AdminSecretName, AdminPasswordKey, CheckOnly, Context, CAWarnDays, ApiClients (JSON
+  [{name, secret, key}]), ApiConnection (host:port written into API client configs),
+  ConfigSecret (Secret to read the server config from when SecretName is empty).
 */
 
 LET Auth <= "Bearer " + read_file(filename=SADir + "/token")
@@ -189,10 +192,84 @@ LET _e6 <= if(condition=AdminSecretName AND A[0].Response = 404 AND AdminCreated
 LET _e7 <= if(condition=AdminSecretName AND NOT (A[0].Response = 200 OR A[0].Response = 404),
               then=fail(msg=format(format="GET secret %v -> HTTP %v", args=[AdminSecretName, A[0].Response])))
 
+-- ── 5. API client certificates ──────────────────────────────────────────────────────
+-- One Secret per declared API client: issued when missing (delete it to rotate), re-issued
+-- when it expires within RenewBeforeDays. Only the certificate is made here (signing needs
+-- the CA, not the datastore); the reconciler sidecar grants the roles through the API.
+LET Clients <= parse_json_array(data=ApiClients || "[]")
+LET CS <= if(condition=Clients AND NOT OK1 AND ConfigSecret, then=getSecret(name=ConfigSecret))
+LET ApiBase <= if(condition=Clients,
+                  then=if(condition=OK1, then=Final, else=secretValue(row=CS[0], key=SecretKey)))
+LET _e8 <= if(condition=Clients AND NOT ApiBase,
+              then=fail(msg=format(format="apiClients: cannot read the server config (secret %v)", args=ConfigSecret)))
+LET _w4 <= if(condition=Clients AND ApiBase,
+              then=copy(accessor="data", filename=ApiBase, dest=WorkDir + "/api-base.yaml"))
+
+LET apiYaml(text) = parse_yaml(filename=text, accessor="data")
+LET issueApiClient(name) = SELECT read_file(filename=WorkDir + "/api-" + name + ".yaml") AS Text, ReturnCode
+  FROM run(argv=[Bin, "--nobanner", "--config", WorkDir + "/api-base.yaml", "config", "api_client",
+                 "--name", name, WorkDir + "/api-" + name + ".yaml"])
+  WHERE Complete
+LET apiSecretData(key, text) = to_dict(item={
+  SELECT * FROM foreach(row={SELECT apiYaml(text=text) AS Y FROM scope()}, query={
+    SELECT * FROM chain(
+      a={SELECT key AS _key, base64encode(string=text) AS _value FROM scope()},
+      b={SELECT "ca.crt" AS _key, base64encode(string=Y.ca_certificate) AS _value FROM scope()},
+      c={SELECT "tls.crt" AS _key, base64encode(string=Y.client_cert) AS _value FROM scope()},
+      d={SELECT "tls.key" AS _key, base64encode(string=Y.client_private_key) AS _value FROM scope()},
+      e={SELECT "endpoint" AS _key, base64encode(string=ApiConnection) AS _value FROM scope()})
+  })
+})
+
+LET Api1 <= SELECT name, secret, key, Response AS Status, Content FROM foreach(row=Clients, query={
+  SELECT name, secret, key, Response, Content
+  FROM k8s(method="GET", url=SecretsURL + "/" + secret, body="", ctype="application/json", params=dict())
+})
+LET Api2 <= SELECT name, secret, key, Status,
+       if(condition=Status = 200,
+          then=certDays(pem=apiYaml(text=secretValue(row=dict(Content=Content), key=key)).client_cert)) AS Days
+  FROM Api1
+LET _e9 <= SELECT fail(msg=format(format="apiClients: GET secret %v -> HTTP %v", args=[secret, Status]))
+  FROM Api2 WHERE NOT (Status = 200 OR Status = 404)
+LET Api3 <= SELECT name, secret, key, Status, Days,
+       if(condition=Status = 404, then="created",
+          else=if(condition=Status = 200 AND Days < int(int=RenewBeforeDays), then="renewed",
+                  else="present")) AS Action
+  FROM Api2 WHERE Status = 200 OR Status = 404
+LET Api4 <= SELECT name, secret, key, Action,
+       if(condition=Action != "present",
+          then=regex_replace(source=issueApiClient(name=name)[0].Text,
+                             re="api_connection_string: .*",
+                             replace="api_connection_string: " + ApiConnection)) AS Text
+  FROM Api3
+LET ApiDone <= SELECT name, secret, Action,
+       if(condition=Action = "created",
+          then=k8s(method="POST", url=SecretsURL, ctype="application/json", params=dict(),
+                   body=serialize(format="json", item=dict(
+                     apiVersion="v1", kind="Secret", type="Opaque",
+                     metadata=dict(name=secret, labels=Labels, annotations=dict(
+                       `argocd.argoproj.io/sync-options`="Prune=false",
+                       `argocd.argoproj.io/compare-options`="IgnoreExtraneous",
+                       `velociraptor.app/api-client`=name,
+                       `velociraptor.app/created-at`=Now)),
+                     data=apiSecretData(key=key, text=Text))))[0].Response,
+          else=if(condition=Action = "renewed",
+                  then=k8s(method="PATCH", url=SecretsURL + "/" + secret,
+                           ctype="application/merge-patch+json", params=dict(),
+                           body=serialize(format="json", item=dict(
+                             metadata=dict(annotations=dict(`velociraptor.app/renewed-at`=Now)),
+                             data=apiSecretData(key=key, text=Text))))[0].Response)) AS Response
+  FROM Api4
+LET _e10 <= SELECT fail(msg=format(format="apiClients: %v secret %v -> HTTP %v", args=[Action, secret, Response]))
+  FROM ApiDone
+  WHERE (Action = "created" AND Response != 201) OR (Action = "renewed" AND Response != 200)
+       OR (Action != "present" AND NOT Response)
+
 SELECT SecretName AS Secret, Source, Renew AS Renewed,
        Before AS DaysLeftBefore, After AS DaysLeftAfter,
        Restarted.Name AS RestartedPods,
        if(condition=AdminSecretName,
           then=if(condition=A[0].Response = 200, then="present",
-                  else=if(condition=AdminCreated[0].Response = 201, then="created", else="error"))) AS AdminSecret
+                  else=if(condition=AdminCreated[0].Response = 201, then="created", else="error"))) AS AdminSecret,
+       ApiDone.name AS ApiClients, ApiDone.Action AS ApiClientActions
 FROM scope()

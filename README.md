@@ -16,8 +16,15 @@ Runs a hardened **distroless, rootless** rebuild of the server image, published 
 - **Fine-grained server config from values**: ports, URLs, datastore, logging, monitoring, auth
   are rendered from chart values; any other field through per-section passthrough maps.
 - Initial administrator with a generated password, OIDC (Keycloak/Google/Azure).
-- Declarative **orgs** (multi-tenancy), reconciled through the server API.
-- Client installers (MSI/DEB/RPM) built on first start (`config.initializeServer`).
+- Declarative **orgs** (multi-tenancy) and **per-org state** (users and roles, client/server
+  monitoring, tools, VQL secrets, recurring hunts), reconciled through the server API.
+- **Server API** exposed to in-cluster consumers (SOAR, scripts) with **API client certificates**
+  issued in-cluster as Secrets, roles granted per org, renewed and rotated.
+- **Client distribution**: each org's client config kept in a Secret, MSI/DEB/RPM installers
+  rebuilt when it changes (and built on first start with `config.initializeServer`).
+- **Off-cluster backup**: identity + Velociraptor backups uploaded to S3 / MinIO / RustFS.
+- Extension points: `extraObjects`, `extraContainers`, `extraInitContainers`, custom artifact
+  ConfigMaps.
 - StatefulSet master + optional master/minion multi-frontend.
 - Agent frontend exposed by `LoadBalancer` or SSL-passthrough Ingress; GUI by Ingress.
 - NetworkPolicy, ServiceMonitor (master + minions), PrometheusRule alerts, hardened securityContext.
@@ -26,7 +33,8 @@ Runs a hardened **distroless, rootless** rebuild of the server image, published 
 
 ## Prerequisites
 
-- Kubernetes **>= 1.27** (>= 1.29 for orgs), Helm **3+**.
+- Kubernetes **>= 1.27** (>= 1.29 for orgs, state, API clients, client export and S3 backup:
+  native sidecars), Helm **3+**.
 - Optional: an nginx ingress controller with `--enable-ssl-passthrough` (agent Ingress), a
   `ReadWriteMany` StorageClass (multi-frontend), Prometheus Operator CRDs (ServiceMonitor,
   PrometheusRule), kube-state-metrics (Kubernetes alerts).
@@ -45,12 +53,13 @@ helm install velociraptor oci://ghcr.io/maximewewer/charts/velociraptor \
 
 # generated admin password
 kubectl get secret velociraptor-admin -n dfir -o jsonpath='{.data.password}' | base64 -d
-# agent config (Client.server_urls = https://velociraptor-agents.example.com/)
+# agent config (Client.server_urls = https://velociraptor-agents.example.com/);
+# with --set clientConfig.export.enabled=true: kubectl get secret velociraptor-client-root
 kubectl exec -n dfir velociraptor-0 -c velociraptor -- \
   /velociraptor --config /etc/velociraptor/server.config.yaml config client > client.config.yaml
 ```
 
-Back up the identity Secret: losing it orphans every enrolled agent.
+Back up the identity Secret: losing it orphans every enrolled agent (or let `backup.s3` upload it).
 
 ```bash
 kubectl get secret velociraptor-server-config -n dfir -o yaml > velociraptor-identity.backup.yaml
@@ -109,7 +118,8 @@ bootstrap automatically, keeping the same CA.
 ## Configuration
 
 See [`chart/README.md`](chart/README.md): identity lifecycle, certificate renewal (and the upstream
-client bug that makes renewals disruptive), orgs, monitoring, testing and the full list of values.
+client bug that makes renewals disruptive), orgs and per-org state, server API and API clients,
+client distribution, backup, monitoring, testing and the full list of values.
 
 ## License
 

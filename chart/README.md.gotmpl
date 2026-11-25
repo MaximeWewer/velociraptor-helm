@@ -70,7 +70,8 @@ a raw `config generate` binds the GUI to `127.0.0.1`, stores data under `/var/tm
 read-only root filesystem) and points agents at `localhost`.
 
 > **Back up the identity Secret.** Losing it orphans every enrolled agent:
-> `kubectl get secret <fullname>-server-config -o yaml > velociraptor-identity.backup.yaml`
+> `kubectl get secret <fullname>-server-config -o yaml > velociraptor-identity.backup.yaml`,
+> or let [`backup.s3`](#backup-backups3) upload it off-cluster.
 
 ### Certificate renewal disconnects running agents (upstream bug)
 
@@ -116,7 +117,9 @@ applied on the server's very first start and `org_create()` refuses to run offli
 reconciles orgs **through the live API**: an init container issues an in-memory API client certificate,
 then a native sidecar ([`files/state.vql`](files/state.vql)) creates the missing orgs and grants
 `gui.initialAdmin` the administrator role in them every `reconcilePeriodSeconds`. Orgs are never renamed
-or deleted by the chart. Per-org client config (`config client --org` returns an empty nonce offline):
+or deleted by the chart. Per-org client config: enable `clientConfig.export` (one Secret per org, see
+[Client distribution](#client-distribution-clientconfig)), or read it once (`config client --org`
+returns an empty nonce offline):
 
 ```sh
 kubectl exec -n dfir velociraptor-0 -c velociraptor -- /velociraptor --config /etc/velociraptor/server.config.yaml \
@@ -132,7 +135,7 @@ The chart renders the operational config from values and deep-merges it onto the
 | `GUI.bind_port` / `GUI.public_url` / `GUI.base_path` | `gui.containerPort` / `gui.publicUrl` / `gui.basePath` |
 | `GUI.authenticator.type` (+ OIDC) | `gui.oidc.*` (else `Basic`) |
 | `Frontend.bind_port` / `Frontend.hostname` | `frontend.containerPort` / `frontend.ingress.host` |
-| `API.bind_address` / `hostname` / `pinned_gw_name` | `frontend.minions.enabled` |
+| `API.bind_address` / `hostname` / `pinned_gw_name` | `frontend.minions.enabled` / `api.expose.enabled` |
 | `Client.server_urls` | see [Install](#install) |
 | `Datastore.location` / `filestore_directory` | `persistence.mountPath` |
 | `Monitoring.bind_address` | `serviceMonitor.enabled` (0.0.0.0 to scrape) |
@@ -195,7 +198,8 @@ OIDC discovery is fetched at server start: with `networkPolicy.enabled`, list th
 `api.expose.enabled` makes the master API (gRPC, mutual TLS) listen on `0.0.0.0` behind the
 `<fullname>-api` Service, so API clients outside the pod (Tracecat, scripts, Grafana) can reach
 it. The NetworkPolicy only admits the release's own pods and `api.expose.allowedFrom` peers.
-`API.hostname` is set to the Service DNS name; clients verify the server by its pinned
+`API.hostname` is set to the Service DNS name for minions and API clients (the master pod itself
+dials its API over `127.0.0.1`: the Service has no endpoints until the pod is Ready); clients verify the server by its pinned
 certificate name (`GRPC_GW`), not by DNS. API clients authenticate with certificates signed by
 the server CA (see `apiClients`).
 
@@ -304,9 +308,9 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 
 ## Testing
 
-- `helm test <release>`: a pod running the chart's own image checks that the frontend serves its certificate and that the GUI answers (Basic: the initial admin logs in; OIDC: anonymous API calls get 401).
+- `helm test <release>`: a pod running the chart's own image checks (retrying for up to a minute while the release settles) that the frontend serves its certificate and that the GUI answers (Basic: the initial admin logs in; OIDC: anonymous API calls get 401).
 - CI (`.github/workflows/test-chart.yml`): `ct lint` + render of every mode + README freshness + `promtool` rule tests; then, on kind, `ct install` of `chart/ci/*-values.yaml` (with `helm test`) and `ci/e2e.sh`.
-- `ci/e2e.sh` (any cluster, current context): bootstrap, enrolled agent, idempotent upgrade, orgs, forced renewal (same CA, new certificate served), uninstall/reinstall (identity kept), read-only check failing in `existingSecret` mode, `inline` → bootstrap migration.
+- `ci/e2e.sh` (any cluster, current context): bootstrap, enrolled agent, idempotent upgrade, orgs, API exposure and API client certificates, per-org state, client config export, forced renewal (same CA, new certificate served), uninstall/reinstall (identity kept), read-only check failing in `existingSecret` mode, `inline` → bootstrap migration.
 - Validated manually (Calico, NetworkPolicy enforced): OIDC login through Keycloak (redirect, form, callback, session), multi-frontend (agent on a minion visible on the master), GUI closed to undeclared peers, server egress limited to DNS + IdP.
 
 ## Operational pitfalls

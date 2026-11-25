@@ -44,7 +44,7 @@ LET fail(msg) = log(level="ERROR", message="pki: %v", args=msg)
 -- Kubernetes REST call -> rows of {Response, Content}.
 LET k8s(method, url, body, ctype, params) = SELECT Response, Content FROM http_client(
     url=url, method=method, data=body, params=params, root_ca=KubeCA,
-    chunk_size=100000000,
+    chunk_size=1000000,
     headers=dict(Authorization=Auth, `Content-Type`=ctype, Accept="application/json"))
 LET getSecret(name) = SELECT * FROM k8s(method="GET", url=SecretsURL + "/" + name,
     body="", ctype="application/json", params=dict())
@@ -54,7 +54,7 @@ LET secretData(key, value) = to_dict(item={
     SELECT key AS _key, base64encode(string=value) AS _value FROM scope()})
 
 -- Run the velociraptor binary; return stdout, or fail on a non-zero exit code.
-LET run(argv) = SELECT * FROM execve(argv=argv, sep="\x00\x00", length=100000000)
+LET run(argv) = SELECT * FROM execve(argv=argv, sep="\x00\x00", length=1000000)
 LET stdout(argv) = SELECT * FROM foreach(row={
     SELECT run(argv=argv) AS R FROM scope()
   }, query={

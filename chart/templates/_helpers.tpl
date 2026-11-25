@@ -230,7 +230,32 @@ volumes:
 
 {{/* "true" when the API reconciler sidecar runs (orgs and/or API client roles to apply). */}}
 {{- define "velociraptor.reconcilerEnabled" -}}
-{{- if or .Values.orgs.items .Values.apiClients .Values.state.orgs -}}true{{- end -}}
+{{- if or .Values.orgs.items .Values.apiClients .Values.state.orgs .Values.clientConfig.export.enabled -}}true{{- end -}}
+{{- end }}
+
+{{/* Org ids whose client config is exported (JSON list): clientConfig.export.orgs, or
+     root + orgs.items. Empty list when the export is disabled. */}}
+{{- define "velociraptor.exportOrgs" -}}
+{{- $ids := list -}}
+{{- if .Values.clientConfig.export.enabled -}}
+{{- if .Values.clientConfig.export.orgs -}}{{ $ids = .Values.clientConfig.export.orgs }}
+{{- else -}}{{ $ids = list "root" }}{{ range .Values.orgs.items }}{{ $ids = append $ids .id }}{{ end }}{{- end -}}
+{{- end -}}
+{{- toJson $ids -}}
+{{- end }}
+
+{{/* Non-root orgs the reconciler acts in (JSON list): orgs.items, state.orgs, export. */}}
+{{- define "velociraptor.managedOrgs" -}}
+{{- $ids := list -}}
+{{- range .Values.orgs.items }}{{ $ids = append $ids .id }}{{ end -}}
+{{- range .Values.state.orgs }}{{ $ids = append $ids (.id | default "root") }}{{ end -}}
+{{- range (include "velociraptor.exportOrgs" . | fromJsonArray) }}{{ $ids = append $ids . }}{{ end -}}
+{{- toJson (without ($ids | uniq) "root") -}}
+{{- end }}
+
+{{/* Prefix of the exported client config Secrets (+ lowercased org id). */}}
+{{- define "velociraptor.exportPrefix" -}}
+{{- .Values.clientConfig.export.secretPrefix | default (printf "%s-client-" (include "velociraptor.fullname" .)) -}}
 {{- end }}
 
 {{/* Seconds from an int or a duration string ("90s", "15m", "12h", "7d"). */}}
@@ -394,6 +419,24 @@ volumes:
     - {{ printf "State=%s" (include "velociraptor.stateJson" .) | quote }}
     - --env
     - Period={{ .Values.state.reconcilePeriodSeconds }}
+    - --env
+    - {{ printf "ManagedOrgs=%s" (include "velociraptor.managedOrgs" .) | quote }}
+    - --env
+    - ApiUser=velociraptor-helm
+    - --env
+    - {{ printf "ExportOrgs=%s" (include "velociraptor.exportOrgs" .) | quote }}
+    - --env
+    - ExportPrefix={{ include "velociraptor.exportPrefix" . }}
+    - --env
+    - ExportKey={{ .Values.clientConfig.export.key }}
+    - --env
+    - Packages={{ .Values.clientConfig.packages.enabled }}
+    - --env
+    - Release={{ .Release.Name }}
+    - --env
+    - KubeAPI=https://kubernetes.default.svc
+    - --env
+    - SADir=/var/run/secrets/kubernetes.io/serviceaccount
     - {{ .Files.Get "files/state.vql" | toJson }}
   securityContext:
     {{- toYaml .Values.securityContext | nindent 4 }}
@@ -404,6 +447,77 @@ volumes:
       mountPath: /api
       readOnly: true
     - name: reconciler-tmp
+      mountPath: /tmp
+    {{- if .Values.clientConfig.export.enabled }}
+    # Kubernetes API token of this sidecar only (the pod does not automount one).
+    - name: reconciler-token
+      mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      readOnly: true
+    {{- end }}
+{{- end }}
+{{- end }}
+
+{{/* Native sidecar uploading the identity + Velociraptor backups to S3 (chart/files/backup.vql). */}}
+{{- define "velociraptor.backupSidecar" -}}
+{{- $b := .Values.backup.s3 }}
+{{- if $b.enabled }}
+{{- if not (and $b.bucket $b.existingSecret) }}{{ fail "backup.s3.enabled needs backup.s3.bucket and backup.s3.existingSecret (keys accessKeyId, secretAccessKey)" }}{{ end }}
+{{- if not (semverCompare ">=1.29.0-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "backup.s3 needs Kubernetes >= 1.29 (native sidecar containers)." }}
+{{- end }}
+- name: backup-uploader
+  image: {{ include "velociraptor.image" . }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  restartPolicy: Always
+  args:
+    - -v
+    - --nobanner
+    - query
+    - --format=jsonl
+    - --env
+    - Bucket={{ $b.bucket }}
+    - --env
+    - Region={{ $b.region }}
+    - --env
+    - Endpoint={{ $b.endpoint }}
+    - --env
+    - PathStyle={{ $b.pathStyle }}
+    - --env
+    - SkipVerify={{ $b.skipVerify }}
+    - --env
+    - Prefix={{ $b.prefix }}
+    - --env
+    - Sse={{ $b.serverSideEncryption }}
+    - --env
+    - KmsKey={{ $b.kmsKeyId }}
+    - --env
+    - IntervalSeconds={{ $b.intervalSeconds }}
+    - --env
+    - IdentityFile={{ if $b.includeIdentity }}/identity/{{ .Values.config.secretKey }}{{ end }}
+    - --env
+    - Release={{ .Release.Name }}
+    - --env
+    - BackupsGlob={{ .Values.persistence.mountPath }}/backups/*.zip
+    - --env
+    - CredsDir=/s3
+    - {{ .Files.Get "files/backup.vql" | toJson }}
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  resources:
+    {{- toYaml $b.resources | nindent 4 }}
+  volumeMounts:
+    - name: datastore
+      mountPath: {{ .Values.persistence.mountPath }}
+      readOnly: true
+    {{- if $b.includeIdentity }}
+    - name: backup-identity
+      mountPath: /identity
+      readOnly: true
+    {{- end }}
+    - name: backup-s3
+      mountPath: /s3
+      readOnly: true
+    - name: backup-tmp
       mountPath: /tmp
 {{- end }}
 {{- end }}

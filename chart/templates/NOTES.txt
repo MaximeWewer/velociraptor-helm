@@ -19,9 +19,17 @@ Agents (frontend, gRPC/mTLS) dial: {{ include "velociraptor.clientServerUrls" . 
   This is the in-cluster Service address: set config.server.clientServerUrls (or
   frontend.ingress) to the address your endpoints actually reach.
 {{- end }}
+{{- if .Values.clientConfig.export.enabled }}
+  Client configs (kept up to date by the reconciler, one Secret per org):
+  {{- $prefix := include "velociraptor.exportPrefix" . }}
+  {{- range (include "velociraptor.exportOrgs" . | fromJsonArray) }}
+    kubectl get secret {{ $prefix }}{{ lower . }} -n {{ $.Release.Namespace }} -o jsonpath='{.data.{{ $.Values.clientConfig.export.key | replace "." "\\." }}}' | base64 -d   # org {{ . }}
+  {{- end }}
+{{- else }}
   Client config (to package/deploy the agent):
     kubectl exec -n {{ .Release.Namespace }} {{ $fullName }}-0 -c velociraptor -- /velociraptor --config {{ .Values.config.mountPath }} config client > client.config.yaml
-{{- if .Values.orgs.items }}
+{{- end }}
+{{- if and .Values.orgs.items (not .Values.clientConfig.export.enabled) }}
   Per-org client config (own nonce; `config client --org` does not work offline):
     kubectl exec -n {{ .Release.Namespace }} {{ $fullName }}-0 -c velociraptor -- /velociraptor --config {{ .Values.config.mountPath }} query --format=jsonl "SELECT _client_config FROM orgs() WHERE OrgId = '<id>'" | jq -r ._client_config > client.<id>.yaml
     orgs: {{ range $i, $o := .Values.orgs.items }}{{ if $i }}, {{ end }}{{ $o.id }} ({{ $o.name }}){{ end }}

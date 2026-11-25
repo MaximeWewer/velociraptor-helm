@@ -124,13 +124,16 @@ log "C. orgs and API clients through the API"
 install $NS_A --set 'orgs.items[0].id=O01' --set 'orgs.items[0].name=E2E org' --set state.reconcilePeriodSeconds=15 \
   --set api.expose.enabled=true --set 'apiClients[0].name=e2e-client' --set 'apiClients[0].roles={api,reader}' \
   --set 'state.orgs[0].id=root' --set 'state.orgs[0].users[0].name=e2e-user' --set 'state.orgs[0].users[0].roles={reader}' \
-  --set 'state.orgs[0].serverMonitoring={Server.Monitor.Health}'
-orgs_ok() { for _ in $(seq 1 24); do kubectl logs -n $NS_A $REL-0 -c state-reconciler 2>/dev/null | grep -q '"Granted": "e2e-client"' && return 0; sleep 5; done; return 1; }
+  --set 'state.orgs[0].serverMonitoring={Server.Monitor.Health}' --set clientConfig.export.enabled=true
+orgs_ok() { for _ in $(seq 1 48); do kubectl logs -n $NS_A $REL-0 -c state-reconciler 2>/dev/null | grep -q '"Granted": "e2e-client"' && return 0; sleep 5; done; return 1; }
 check "org O01 reconciled" orgs_ok
 check "org O01 exists" bash -c "kubectl exec -n $NS_A $REL-0 -c velociraptor -- /velociraptor --nobanner --config /etc/velociraptor/server.config.yaml query --format=jsonl \"SELECT OrgId FROM orgs()\" 2>/dev/null | grep -q O01"
 
 state_ok() { kubectl logs -n $NS_A $REL-0 -c state-reconciler 2>/dev/null | grep 'reconcile:' | tail -1 | grep -q '"Granted": "e2e-user".*"ServerMonitoring": \[ "Server.Monitor.Health" \]'; }
 check "state applied (org user role, server monitoring table)" state_ok
+export_ok() { for _ in $(seq 1 24); do kubectl get secret $REL-client-root -n $NS_A >/dev/null 2>&1 && kubectl get secret $REL-client-o01 -n $NS_A >/dev/null 2>&1 && return 0; sleep 5; done; return 1; }
+check "client configs exported per org" export_ok
+check "exported root config is the server's (same CA)" test "$(kubectl get secret $REL-client-root -n $NS_A -o jsonpath='{.data.client\.config\.yaml}' | base64 -d | yqr .Client.ca_certificate | sha256sum | cut -c1-16)" = "$CA0"
 check "API client Secret issued" test "$(kubectl get secret $REL-api-e2e-client -n $NS_A -o jsonpath='{.data}' | jq -r 'keys|join(",")')" = "api.config.yaml,ca.crt,endpoint,tls.crt,tls.key"
 api_query() {  # a pod of the release (allowed by the NetworkPolicy) using the client Secret
   kubectl run "apic-$RANDOM" -n $NS_A --rm -i --restart=Never --quiet \

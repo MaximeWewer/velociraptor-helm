@@ -1,0 +1,56 @@
+/*
+  velociraptor-helm - off-cluster backup uploader (S3 / MinIO / any S3-compatible store).
+
+  Runs in a native sidecar of the master, which already mounts (read-only) what a disaster
+  recovery needs, so no extra RBAC and no node-affinity games with the RWO datastore:
+    - the server identity (CA + keys + nonces), uploaded as <Prefix>identity/<Release>-<Key>
+      (overwritten each run: enable bucket versioning to keep history);
+    - Velociraptor's own backups (/datastore/backups/*.zip, written every
+      defaults.backup_period_seconds), uploaded as <Prefix>backups/<file>. Only files modified
+      within the last two intervals are sent, so each one goes out (at least) once.
+  The S3 credentials are read from mounted files, never passed on a command line.
+  Every IntervalSeconds; after 5 failed runs the program exits non-zero (kubelet restarts the
+  sidecar; the VelociraptorReconcilerFailing alert covers this container too).
+
+  Inputs (--env): Bucket, Region, Endpoint, PathStyle, SkipVerify, Prefix, Sse, KmsKey,
+  IntervalSeconds, IdentityFile (empty = skip), Release, BackupsGlob, CredsDir.
+*/
+
+LET Key <= read_file(filename=CredsDir + "/accessKeyId")
+LET SecretKey <= read_file(filename=CredsDir + "/secretAccessKey")
+LET Interval <= int(int=IntervalSeconds)
+
+-- upload_s3 returns {Path, Size, UploadId}: success = a non-zero size.
+-- `accessor`: "file" for regular files; "data" (file = the content) for Secret-mounted
+-- files, which are symlinks that upload_s3 would otherwise send as the link itself.
+LET put(file, accessor, name) = upload_s3(file=file, accessor=accessor, name=Prefix + name,
+    bucket=Bucket, region=Region, credentials_key=Key, credentials_secret=SecretKey,
+    endpoint=Endpoint, path_style=PathStyle = "true", skip_verify=SkipVerify = "true",
+    serverside_encryption=Sse, kms_encryption_key=KmsKey).Size > 0
+
+LET run = SELECT * FROM chain(
+  a={ SELECT "identity" AS Kind, IdentityFile AS File,
+             put(file=read_file(filename=IdentityFile, length=10000000), accessor="data",
+                 name="identity/" + Release + "-" + basename(path=IdentityFile)) AS Upload
+      FROM scope() WHERE IdentityFile },
+  b={ SELECT "backup" AS Kind, OSPath.String AS File,
+             put(file=OSPath.String, accessor="file", name="backups/" + OSPath.Basename) AS Upload
+      FROM glob(globs=BackupsGlob)
+      WHERE Mtime.Unix > now() - 2 * Interval })
+
+-- Each file is uploaded and logged exactly once per run (rows are memoized).
+LET logged = SELECT Kind, File, Upload,
+       log(level=if(condition=Upload, then="INFO", else="WARN"), dedup=-1,
+           message="backup: %v %v -> %v", args=[Kind, File, if(condition=Upload, then="ok", else="FAILED")]) AS Logged
+  FROM run
+
+-- One summary row per run (none when there is nothing to upload).
+LET attempt = SELECT count(items=Logged) AS Uploaded, sum(item=if(condition=Upload, then=0, else=1)) AS Failed
+  FROM logged GROUP BY 1
+
+-- Only failed runs reach the LIMIT: 5 failures end the loop.
+SELECT Uploaded, Failed FROM foreach(row={SELECT * FROM clock(period=Interval, start=0)}, query=attempt)
+WHERE Failed > 0
+LIMIT 5
+
+SELECT log(level="ERROR", message="backup: 5 failed runs, exiting so that kubelet restarts the sidecar") FROM scope()

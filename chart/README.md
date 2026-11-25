@@ -244,6 +244,37 @@ alone. When you take over `clientMonitoring`, list the built-in entries you stil
 `Quarantine` label event `Windows.Remediation.QuarantineMonitor`). A non-root org must exist
 (`orgs.items`). See `values.yaml` for a full example.
 
+## Client distribution (`clientConfig`)
+
+- `clientConfig.export.enabled`: the reconciler writes each org's client config (CA, nonce,
+  server URLs) to `<fullname>-client-<org id, lowercased>` (key `client.config.yaml`), and
+  rewrites it only when it changes. Software distribution / MDM tooling picks it up from there
+  (this replaces the `kubectl exec ... orgs()` recipe). Orgs: `clientConfig.export.orgs`, or
+  root + `orgs.items`. The sidecar gets a projected Kubernetes token (mounted in that container
+  only) bound to a Role limited to those Secret names; with `networkPolicy.enabled`, egress to
+  the API server is opened per `networkPolicy.kubeApiEgress`.
+- `clientConfig.packages.enabled`: on a changed exported config, rebuild that org's MSI/DEB/RPM
+  installers on the server (`Server.Utils.CreateMSI` / `CreateLinuxPackages`, downloadable from
+  the GUI; needs egress to GitHub releases). To force a rebuild, delete the exported Secret.
+  macOS `.pkg` is not built: Velociraptor has no pkg builder, and MDM-deployable packages must
+  be signed and notarized with an Apple Developer ID.
+- The reconciler's API user grants itself `administrator` in every managed org: rights inherited
+  from root are not enough inside an org (e.g. collecting server artifacts there is denied).
+
+## Backup (`backup.s3`)
+
+Velociraptor writes its own backups (clients, ACLs, hunts, ...) to `<datastore>/backups` every
+`config.server.defaults.backup_period_seconds`, but on the same PVC. `backup.s3.enabled` adds a
+sidecar to the master pod (it already mounts the datastore and the identity read-only: no RBAC,
+no node affinity) that uploads, every `intervalSeconds`, to S3 / MinIO / RustFS:
+
+- `<prefix>identity/<release>-server.config.yaml`: the server identity (CA + keys). Use a
+  dedicated bucket with versioning, encryption (`serverSideEncryption`) and a tight policy.
+- `<prefix>backups/<file>.zip`: Velociraptor's backups (each new file is sent at least once).
+
+For the whole PVC (collected data), prefer Velero if the cluster has it. Restoring the identity:
+recreate the `<fullname>-server-config` Secret from the uploaded file before installing.
+
 ## Extension points
 
 - `extraObjects`: raw manifests (maps or strings) rendered through `tpl`, e.g. a responder
@@ -266,6 +297,7 @@ alone. When you take over `clientMonitoring`, list the built-in entries you stil
 | `VelociraptorMasterNotReady` | critical | the master is not Ready for 10m |
 | `VelociraptorCertificateCheckFailing` | warning | the certificate CronJob failed / stopped succeeding (see below) |
 | `VelociraptorReconcilerFailing` | warning | the API reconciler sidecar restarted at least twice in 1h (it exits after 5 failed attempts) |
+| `VelociraptorBackupFailing` | warning | the backup-uploader sidecar restarted in the last 6h (it exits after 5 failed runs) |
 | `VelociraptorIdentitySecretMissing` | critical | the identity Secret (bootstrap) disappeared - restore it before the next upgrade |
 
 Velociraptor exports no certificate-expiry metric, so the **certificate CronJob is the probe**: in bootstrap mode it renews; with `existingSecret` / `inline` it runs **read-only** (`CheckOnly`) and fails when the server certificates expire within `renewBeforeDays` - nothing renews a config managed outside the chart. In every mode it fails when the CA expires within `config.bootstrap.caWarnDays` (180). The rules are unit-tested with `promtool` (`ci/test-alert-rules.sh`).
@@ -308,6 +340,8 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 | `api.expose.enabled` / `api.expose.allowedFrom` | `false` / `[]` | Serve the API on the `<fullname>-api` Service to the declared peers |
 | `apiClients` | `[]` | API client certificates (Secrets) + roles granted through the API |
 | `state.orgs` | `[]` | Per-org users, client/server monitoring, tools, VQL secrets, recurring hunts |
+| `clientConfig.export.enabled` / `clientConfig.packages.enabled` | `false` / `false` | Client config per org in Secrets / installers rebuilt on change |
+| `backup.s3.enabled` | `false` | Upload the identity + Velociraptor backups to S3-compatible storage |
 | `extraObjects` / `extraContainers` / `extraInitContainers` | `[]` | Escape hatches (rendered through `tpl`) |
 | `frontend.minions.enabled` | `false` | Multi-frontend (master/minion); requires a RWX `persistence.existingClaim` |
 | `frontend.service.type` | `LoadBalancer` | Frontend exposure (endpoint clients) |
@@ -337,6 +371,28 @@ Kubernetes: `>=1.27.0-0`
 | api.expose.enabled | bool | `false` |  |
 | api.service.annotations | object | `{}` |  |
 | apiClients | list | `[]` |  |
+| backup.s3.bucket | string | `""` |  |
+| backup.s3.egress.cidrs[0] | string | `"0.0.0.0/0"` |  |
+| backup.s3.egress.ports[0] | int | `443` |  |
+| backup.s3.enabled | bool | `false` |  |
+| backup.s3.endpoint | string | `""` |  |
+| backup.s3.existingSecret | string | `""` |  |
+| backup.s3.includeIdentity | bool | `true` |  |
+| backup.s3.intervalSeconds | int | `3600` |  |
+| backup.s3.kmsKeyId | string | `""` |  |
+| backup.s3.pathStyle | bool | `false` |  |
+| backup.s3.prefix | string | `"velociraptor/"` |  |
+| backup.s3.region | string | `"us-east-1"` |  |
+| backup.s3.resources.limits.memory | string | `"256Mi"` |  |
+| backup.s3.resources.requests.cpu | string | `"10m"` |  |
+| backup.s3.resources.requests.memory | string | `"64Mi"` |  |
+| backup.s3.serverSideEncryption | string | `""` |  |
+| backup.s3.skipVerify | bool | `false` |  |
+| clientConfig.export.enabled | bool | `false` |  |
+| clientConfig.export.key | string | `"client.config.yaml"` |  |
+| clientConfig.export.orgs | list | `[]` |  |
+| clientConfig.export.secretPrefix | string | `""` |  |
+| clientConfig.packages.enabled | bool | `false` |  |
 | config.bootstrap.activeDeadlineSeconds | int | `300` |  |
 | config.bootstrap.caWarnDays | int | `180` |  |
 | config.bootstrap.certificateValidityDays | int | `3650` |  |
@@ -465,6 +521,10 @@ Kubernetes: `>=1.27.0-0`
 | networkPolicy.extraEgress | list | `[]` |  |
 | networkPolicy.frontendAllowedCIDRs[0] | string | `"0.0.0.0/0"` |  |
 | networkPolicy.guiAllowedFrom | list | `[]` |  |
+| networkPolicy.kubeApiEgress.cidrs[0] | string | `"0.0.0.0/0"` |  |
+| networkPolicy.kubeApiEgress.ports[0] | int | `443` |  |
+| networkPolicy.kubeApiEgress.ports[1] | int | `6443` |  |
+| networkPolicy.kubeApiEgress.ports[2] | int | `8443` |  |
 | networkPolicy.metricsAllowedFrom | list | `[]` |  |
 | networkPolicy.oidcEgressCIDRs[0] | string | `"0.0.0.0/0"` |  |
 | networkPolicy.oidcEgressPort | int | `443` |  |

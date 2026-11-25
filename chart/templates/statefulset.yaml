@@ -38,7 +38,7 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- /* Order matters: merge the config, create the admin, then the orgs API client + sidecar. */}}
-      {{- $init := printf "%s\n%s\n%s" (include "velociraptor.overlayInitContainer" .) (include "velociraptor.adminInitContainer" .) (include "velociraptor.orgsInitContainers" .) }}
+      {{- $init := printf "%s\n%s\n%s\n%s" (include "velociraptor.overlayInitContainer" .) (include "velociraptor.adminInitContainer" .) (include "velociraptor.orgsInitContainers" .) (include "velociraptor.backupSidecar" .) }}
       {{- if or (trim $init) .Values.extraInitContainers }}
       initContainers:
         {{- with trim $init }}
@@ -131,6 +131,34 @@ spec:
         - name: reconciler-tmp
           emptyDir:
             sizeLimit: 64Mi
+        {{- if .Values.backup.s3.enabled }}
+        {{- if .Values.backup.s3.includeIdentity }}
+        - name: backup-identity
+          secret:
+            secretName: {{ include "velociraptor.configSecretName" . }}
+        {{- end }}
+        - name: backup-s3
+          secret:
+            secretName: {{ .Values.backup.s3.existingSecret }}
+        - name: backup-tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- end }}
+        {{- if .Values.clientConfig.export.enabled }}
+        - name: reconciler-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef: {fieldPath: metadata.namespace}
+        {{- end }}
         {{- range (include "velociraptor.stateSecretNames" . | fromJsonArray) }}
         - name: state-secret-{{ . }}
           secret:

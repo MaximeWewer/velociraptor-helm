@@ -211,6 +211,13 @@
         "oidcEgressCIDRs": { "type": "array", "items": { "type": "string" } },
         "oidcEgressPort": { "type": "integer" },
         "toolsEgressCIDRs": { "type": "array", "items": { "type": "string" } },
+        "kubeApiEgress": {
+          "type": "object",
+          "properties": {
+            "cidrs": { "type": "array", "items": { "type": "string" } },
+            "ports": { "type": "array", "items": { "type": "integer" } }
+          }
+        },
         "extraEgress": { "type": "array" }
       }
     },
@@ -323,6 +330,45 @@
           "orgs": { "type": "array", "items": { "type": "string" } },
           "secretName": { "type": "string" },
           "secretKey": { "type": "string" }
+        }
+      }
+    },
+    "clientConfig": {
+      "type": "object",
+      "properties": {
+        "export": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "orgs": { "type": "array", "items": { "type": "string" } },
+            "secretPrefix": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "packages": { "type": "object", "properties": { "enabled": { "type": "boolean" } } }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "s3": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "bucket": { "type": "string" },
+            "region": { "type": "string" },
+            "endpoint": { "type": "string" },
+            "pathStyle": { "type": "boolean" },
+            "skipVerify": { "type": "boolean" },
+            "prefix": { "type": "string" },
+            "serverSideEncryption": { "type": "string", "enum": ["", "AES256", "aws:kms"] },
+            "kmsKeyId": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "includeIdentity": { "type": "boolean" },
+            "intervalSeconds": { "type": "integer", "minimum": 60 },
+            "egress": { "type": "object" },
+            "resources": { "type": "object" }
+          }
         }
       }
     },

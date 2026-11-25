@@ -1,0 +1,38 @@
+{{- if .Values.clientConfig.export.enabled }}
+{{- $fullName := include "velociraptor.fullname" . }}
+{{- $prefix := include "velociraptor.exportPrefix" . }}
+# Lets the state reconciler sidecar (the only container with a token, see the statefulset)
+# write the exported client config Secrets, and nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-client-config
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range (include "velociraptor.exportOrgs" . | fromJsonArray) }}
+      - {{ printf "%s%s" $prefix (lower .) }}
+      {{- end }}
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-client-config
+  labels:
+    {{- include "velociraptor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-client-config
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "velociraptor.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

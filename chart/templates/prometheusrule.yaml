@@ -99,6 +99,17 @@ spec:
             description: >-
               Declared orgs/state are not applied. Read its logs:
               kubectl logs -n {{ $ns }} {{ $fullName }}-0 -c {{ "{{" }} $labels.container {{ "}}" }}
+        - alert: VelociraptorBackupFailing
+          # The backup-uploader sidecar exits after 5 failed runs.
+          expr: |
+            increase(kube_pod_init_container_status_restarts_total{namespace="{{ $ns }}", pod=~"{{ $fullName }}-[0-9]+", container="backup-uploader"}[6h]) >= 1
+          labels:
+            severity: warning
+          annotations:
+            summary: Off-cluster backups of {{ $ns }}/{{ $fullName }} are failing.
+            description: >-
+              The identity and Velociraptor backups are not reaching S3. Read its logs:
+              kubectl logs -n {{ $ns }} {{ $fullName }}-0 -c backup-uploader
         {{- if eq (include "velociraptor.configSource" .) "bootstrap" }}
         - alert: VelociraptorIdentitySecretMissing
           expr: absent(kube_secret_info{namespace="{{ $ns }}", secret="{{ include "velociraptor.bootstrapSecretName" . }}"})

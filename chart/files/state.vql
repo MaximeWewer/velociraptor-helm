@@ -23,7 +23,9 @@
   PrometheusRule alert VelociraptorReconcilerFailing fires on those restarts.
 
   Inputs (--env): Bin, ApiConfig, Orgs, Admin, ApiClients, State (JSON, prepared by the chart),
-  Period (seconds).
+  Period (seconds), ManagedOrgs (JSON list of non-root org ids), ApiUser (this sidecar's API
+  user); client config export: ExportOrgs (JSON list of org ids, "[]" = off),
+  ExportPrefix, ExportKey, Packages ("true"/"false"), Release, KubeAPI, SADir.
 */
 
 LET Inner = '''
@@ -32,6 +34,14 @@ LET Existing <= SELECT OrgId FROM orgs()
 LET Missing <= SELECT id, name FROM foreach(row=Wanted) WHERE NOT (id in Existing.OrgId)
 LET Clients <= parse_json_array(data=ApiClients)
 LET States <= parse_json_array(data=State)
+
+-- Materialized in this order: create the orgs, then grant ourselves (the reconciler's own API
+-- user) administrator in every managed org: rights inherited from root are not enough inside
+-- an org (e.g. COLLECT_SERVER is denied), an explicit grant is.
+LET CreatedOrgs <= SELECT id, org_create(name=name, org_id=id).id AS OrgId FROM Missing
+LET Managed <= parse_json_array(data=ManagedOrgs)
+LET SelfGranted <= if(condition=Managed,
+    then=user_grant(user=ApiUser, roles=["administrator"], orgs=Managed))
 
 -- Roles are authoritative: user_grant replaces them, but needs an existing user.
 LET setRoles(name, roles, orgs) = if(condition=user(user=name).name,
@@ -71,8 +81,7 @@ LET applyOrg = SELECT
         FROM scope() }) } AS Hunts
   FROM scope()
 
-SELECT Wanted.id AS Declared,
-       { SELECT id, org_create(name=name, org_id=id).id AS OrgId FROM Missing } AS Created,
+SELECT Wanted.id AS Declared, CreatedOrgs AS Created, SelfGranted,
        if(condition=Admin AND Wanted,
           then=user_grant(user=Admin, roles=["administrator"], orgs=Wanted.id)) AS AdminGranted,
        { SELECT name, roles, orgs, setRoles(name=name, roles=roles, orgs=orgs) AS Granted
@@ -92,10 +101,79 @@ FROM scope()
 LET call(vql) = SELECT * FROM execve(
     argv=[Bin, "--api_config", ApiConfig, "--nobanner", "query", "--format=jsonl",
           "--env", "Orgs=" + Orgs, "--env", "Admin=" + Admin,
-          "--env", "ApiClients=" + ApiClients, "--env", "State=" + State, vql],
-    sep="\x00\x00", length=10000000)
+          "--env", "ApiClients=" + ApiClients, "--env", "State=" + State,
+          "--env", "ManagedOrgs=" + ManagedOrgs, "--env", "ApiUser=" + ApiUser, vql],
+    sep="\x00\x00", length=2000000)
 
-LET attempt = SELECT * FROM foreach(row={
+/*
+  Client config export (ExportOrgs non-empty): each org's client config (CA, nonce, server
+  URLs) is written to the Secret <ExportPrefix><org id, lowercased> only when it changed. The
+  sidecar talks to the Kubernetes API with a projected token mounted in this container only.
+  On a change, Packages=true rebuilds the MSI/DEB/RPM installers of that org on the server.
+  Configs are never logged (only the action per org).
+*/
+LET Exporting <= ExportOrgs AND ExportOrgs != "[]"
+LET kubeAuth = "Bearer " + read_file(filename=SADir + "/token")
+LET KubeCA <= if(condition=Exporting, then=read_file(filename=SADir + "/ca.crt"))
+LET SecretsURL <= if(condition=Exporting,
+    then=KubeAPI + "/api/v1/namespaces/" + read_file(filename=SADir + "/namespace") + "/secrets")
+LET k8s(method, url, body, ctype) = SELECT Response, Content FROM http_client(
+    url=url, method=method, data=body, root_ca=KubeCA, chunk_size=1000000,
+    headers=dict(Authorization=kubeAuth, `Content-Type`=ctype, Accept="application/json"))
+
+LET ExportInner = '''
+SELECT OrgId, _client_config AS Config FROM orgs()
+WHERE OrgId in parse_json_array(data=ExportOrgs)
+'''
+LET PackagesInner = '''
+SELECT * FROM query(org_id=Org, query={
+  SELECT collect_client(client_id="server",
+           artifacts=["Server.Utils.CreateMSI", "Server.Utils.CreateLinuxPackages"]).flow_id AS Flow
+  FROM scope() })
+'''
+LET apiRows(vql, kv) = SELECT parse_json(data=Stdout) AS R FROM execve(
+    argv=[Bin, "--api_config", ApiConfig, "--nobanner", "query", "--format=jsonl", "--env", kv, vql],
+    sep="\n", length=1000000)
+  WHERE Stdout =~ "^\\{"
+
+LET exportPlan = SELECT * FROM foreach(row={
+    SELECT R.OrgId AS Org, R.Config AS Config, ExportPrefix + lowcase(string=R.OrgId) AS Name
+    FROM apiRows(vql=ExportInner, kv="ExportOrgs=" + ExportOrgs)
+  }, query={
+    SELECT Org, Config, Name, G[0].Response AS Status,
+           get(item=parse_json(data=G[0].Content).data, field=ExportKey) AS Current
+    FROM foreach(row={
+      SELECT k8s(method="GET", url=SecretsURL + "/" + Name, body="", ctype="application/json") AS G
+      FROM scope() })
+  })
+LET export = SELECT Org, Name, Action,
+       if(condition=Action = "created",
+          then=k8s(method="POST", url=SecretsURL, ctype="application/json",
+                   body=serialize(format="json", item=dict(
+                     apiVersion="v1", kind="Secret", type="Opaque",
+                     metadata=dict(name=Name, labels=dict(
+                       `app.kubernetes.io/part-of`="velociraptor",
+                       `velociraptor.app/release`=Release,
+                       `velociraptor.app/org`=Org,
+                       `velociraptor.app/managed-by`="velociraptor-helm-state")),
+                     data=to_dict(item={SELECT ExportKey AS _key,
+                                         base64encode(string=Config) AS _value FROM scope()}))))[0].Response,
+          else=if(condition=Action = "updated",
+                  then=k8s(method="PATCH", url=SecretsURL + "/" + Name,
+                           ctype="application/merge-patch+json",
+                           body=serialize(format="json", item=dict(
+                             data=to_dict(item={SELECT ExportKey AS _key,
+                                                 base64encode(string=Config) AS _value FROM scope()}))))[0].Response)) AS Response,
+       if(condition=(Action = "created" OR Action = "updated") AND Packages = "true",
+          then=apiRows(vql=PackagesInner, kv="Org=" + Org)[0].R.Flow) AS PackagesFlow
+  FROM foreach(row={
+    SELECT Org, Config, Name,
+           if(condition=Status = 404, then="created",
+              else=if(condition=Status = 200 AND Current = base64encode(string=Config), then="unchanged",
+                      else=if(condition=Status = 200, then="updated", else="error"))) AS Action
+    FROM exportPlan })
+
+LET innerAttempt = SELECT * FROM foreach(row={
   SELECT timestamp(epoch=now()) AS Time,
        R[-1].ReturnCode = 0 AS OK,
        if(condition=R[-1].ReturnCode = 0,
@@ -112,6 +190,20 @@ LET attempt = SELECT * FROM foreach(row={
                                 re='''\s*\n\s*''', replace=" ")) AS Logged
   FROM scope()
 })
+
+-- One row per exported org (export runs once per attempt; row values are memoized).
+LET exportAttempt = SELECT timestamp(epoch=now()) AS Time,
+       NOT (Action = "error" OR (Action = "created" AND Response != 201)
+            OR (Action = "updated" AND Response != 200)) AS OK,
+       dict(Org=Org, Secret=Name, Action=Action, Response=Response, PackagesFlow=PackagesFlow) AS Result,
+       log(level=if(condition=Action = "error", then="WARN", else="INFO"),
+           message="export: org=%v secret=%v action=%v http=%v packages=%v", dedup=-1,
+           args=[Org, Name, Action, Response, PackagesFlow]) AS Logged
+  FROM export
+
+LET attempt = SELECT * FROM chain(
+  a=innerAttempt,
+  b={ SELECT * FROM if(condition=Exporting, then=exportAttempt) })
 
 -- Only failed attempts reach the LIMIT: 5 failures end the loop.
 SELECT Time, Result FROM foreach(row={SELECT * FROM clock(period=int(int=Period), start=0)},

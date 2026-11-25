@@ -100,9 +100,35 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.oidcEgressPort }}
     {{- end }}
-    {{- if .Values.config.initializeServer }}
-    # Container.InitializeServer downloads the client binaries (GitHub releases) to build
-    # the MSI/DEB/RPM installers on first start.
+    {{- if .Values.clientConfig.export.enabled }}
+    # State reconciler sidecar: Kubernetes API (exported client config Secrets).
+    - to:
+        {{- range .Values.networkPolicy.kubeApiEgress.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.kubeApiEgress.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.backup.s3.enabled }}
+    # backup-uploader sidecar: the S3 endpoint.
+    - to:
+        {{- range .Values.backup.s3.egress.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range .Values.backup.s3.egress.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- if or .Values.config.initializeServer .Values.clientConfig.packages.enabled }}
+    # Container.InitializeServer / clientConfig.packages download the client binaries
+    # (GitHub releases) to build the MSI/DEB/RPM installers.
     - to:
         {{- range .Values.networkPolicy.toolsEgressCIDRs }}
         - ipBlock:

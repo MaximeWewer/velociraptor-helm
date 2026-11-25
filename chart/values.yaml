@@ -475,7 +475,13 @@ networkPolicy:
     - 0.0.0.0/0
   # Port of the OIDC issuer (HTTPS).
   oidcEgressPort: 443
-  # Egress 443 for config.initializeServer (client binaries downloaded from GitHub
+  # Egress to the Kubernetes API (clientConfig.export). Post-DNAT on most CNIs: the API
+  # server endpoint port (443, 6443 or 8443 depending on the distribution).
+  kubeApiEgress:
+    cidrs:
+      - 0.0.0.0/0
+    ports: [443, 6443, 8443]
+  # Egress 443 for config.initializeServer / clientConfig.packages (client binaries from GitHub
   # releases). CIDR-based: GitHub's ranges change, hence 0.0.0.0/0 by default.
   toolsEgressCIDRs:
     - 0.0.0.0/0
@@ -587,6 +593,61 @@ state:
       memory: 64Mi
     limits:
       memory: 192Mi
+
+## Client distribution.
+## export: the reconciler sidecar writes each org's client config (CA, nonce, server URLs) to
+## the Secret <secretPrefix><org id, lowercased> (key `key`) and rewrites it only when it
+## changes. Software-distribution / MDM tooling consumes it from there. The sidecar gets a
+## projected Kubernetes token (in that container only) bound to a Role limited to those Secret
+## names.
+## packages: on a changed exported config, rebuild that org's MSI/DEB/RPM installers on the
+## server (Server.Utils.CreateMSI / CreateLinuxPackages; downloadable from the GUI). Needs
+## egress to GitHub releases (networkPolicy.toolsEgressCIDRs). macOS .pkg is not built:
+## Velociraptor has no pkg builder and MDM-deployable packages must be signed and notarized.
+clientConfig:
+  export:
+    enabled: false
+    # Org ids to export; empty = root + orgs.items.
+    orgs: []
+    # Default: <fullname>-client-
+    secretPrefix: ""
+    key: client.config.yaml
+  packages:
+    enabled: false
+
+## Off-cluster backup. Velociraptor writes its own backups (clients, ACLs, hunts...) to
+## <persistence.mountPath>/backups every config.server.defaults.backup_period_seconds, but on
+## the same PVC: not a disaster recovery. backup.s3 runs a sidecar in the master pod that
+## uploads the server identity (CA + keys: encrypt the bucket, restrict its policy) and those
+## backups to S3 / MinIO every intervalSeconds. For the whole PVC, prefer Velero if your
+## cluster has it. Needs Kubernetes >= 1.29.
+backup:
+  s3:
+    enabled: false
+    bucket: ""
+    region: us-east-1
+    # Empty = AWS. For MinIO / other S3-compatible stores, e.g. https://minio.example:9000
+    endpoint: ""
+    pathStyle: false
+    skipVerify: false
+    prefix: "velociraptor/"
+    # "AES256" or "aws:kms" (+ kmsKeyId).
+    serverSideEncryption: ""
+    kmsKeyId: ""
+    # Secret with keys accessKeyId / secretAccessKey.
+    existingSecret: ""
+    includeIdentity: true
+    intervalSeconds: 3600
+    egress:
+      cidrs:
+        - 0.0.0.0/0
+      ports: [443]
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
 
 # Custom VQL artifact definitions, mounted read-only and loaded by the server.
 # When enabled, the chart injects `defaults.artifact_definitions_directories`

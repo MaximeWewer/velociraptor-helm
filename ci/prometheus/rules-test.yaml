@@ -104,3 +104,20 @@ tests:
             exp_annotations:
               summary: The Velociraptor API reconciler of dfir/velociraptor keeps failing.
               description: "Declared orgs/state are not applied. Read its logs: kubectl logs -n dfir velociraptor-0 -c state-reconciler"
+
+  # Backup uploader restarted (5 failed runs).
+  - interval: 5m
+    input_series:
+      - series: 'kube_pod_init_container_status_restarts_total{namespace="dfir",pod="velociraptor-0",container="backup-uploader"}'
+        values: '0 0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VelociraptorBackupFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VelociraptorBackupFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: dfir, pod: velociraptor-0, container: backup-uploader}
+            exp_annotations:
+              summary: Off-cluster backups of dfir/velociraptor are failing.
+              description: "The identity and Velociraptor backups are not reaching S3. Read its logs: kubectl logs -n dfir velociraptor-0 -c backup-uploader"

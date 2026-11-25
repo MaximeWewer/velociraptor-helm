@@ -338,7 +338,8 @@
         "type": "object",
         "required": ["name", "roles"],
         "properties": {
-          "name": { "type": "string", "pattern": "^[A-Za-z0-9._@-]+$" },
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9._@-]+$", "not": { "enum": ["GRPC_GW", "velociraptor-helm"] } },
+          "validityDays": { "type": "integer", "minimum": 3 },
           "roles": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
           "permissions": { "type": "array", "items": { "type": "string", "enum": ["all_query", "any_query", "read_results", "label_clients", "collect_client", "collect_basic", "start_hunt", "collect_server", "artifact_writer", "server_artifact_writer", "execve", "notebook_editor", "org_admin", "impersonation", "server_admin", "filesystem_read", "filesystem_write", "network", "machine_state", "prepare_results", "delete_results", "datastore_access", "ALL_QUERY", "ANY_QUERY", "READ_RESULTS", "LABEL_CLIENTS", "COLLECT_CLIENT", "COLLECT_BASIC", "START_HUNT", "COLLECT_SERVER", "ARTIFACT_WRITER", "SERVER_ARTIFACT_WRITER", "EXECVE", "NOTEBOOK_EDITOR", "ORG_ADMIN", "IMPERSONATION", "SERVER_ADMIN", "FILESYSTEM_READ", "FILESYSTEM_WRITE", "NETWORK", "MACHINE_STATE", "PREPARE_RESULTS", "DELETE_RESULTS", "DATASTORE_ACCESS"] }, "uniqueItems": true },
           "orgs": { "type": "array", "items": { "type": "string" } },

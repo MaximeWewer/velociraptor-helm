@@ -292,6 +292,12 @@ apiClients: []
 #    # than their role grants, e.g. Windows.Remediation.Quarantine needs EXECVE + NETWORK,
 #    # which investigator lacks: add them here rather than granting administrator.
 #    permissions: [EXECVE, NETWORK]
+#    # Certificate lifetime (default: the server certificates' validity, e.g. 10 years).
+#    # Shorter = a leaked certificate expires sooner; it is re-issued when a third of it is
+#    # left (or renewBeforeDays), so the consumer must reload the Secret.
+#    validityDays: 90
+#  Removing or renaming a client REVOKES it (its user is deleted, the name can never be
+#  reused): API certificates cannot be revoked otherwise. See chart/README.md.
 #    orgs: [root]                # default [root]
 #    secretName: ""              # default <fullname>-api-<name>
 #    secretKey: api.config.yaml

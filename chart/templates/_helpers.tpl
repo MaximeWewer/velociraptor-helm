@@ -106,8 +106,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/* API clients as the PKI job sees them: [{name, secret, key}]. */}}
 {{- define "velociraptor.apiClientsPki" -}}
 {{- $out := list -}}
+{{- $reserved := list "GRPC_GW" "velociraptor-helm" -}}
+{{- if $.Values.gui.initialAdmin.enabled }}{{ $reserved = append $reserved $.Values.gui.initialAdmin.username }}{{ end -}}
 {{- range .Values.apiClients -}}
-{{- $out = append $out (dict "name" .name "secret" (.secretName | default (printf "%s-api-%s" (include "velociraptor.fullname" $) .name)) "key" (.secretKey | default "api.config.yaml")) -}}
+{{- /* GRPC_GW = the GUI gateway's certificate name: a client certificate carrying it may act as
+       ANY user. velociraptor-helm = the reconciler itself. The initial admin is managed apart. */ -}}
+{{- if has .name $reserved }}{{ fail (printf "apiClients: the name %q is reserved (%s)" .name (join ", " $reserved)) }}{{ end -}}
+{{- $out = append $out (dict "name" .name "secret" (.secretName | default (printf "%s-api-%s" (include "velociraptor.fullname" $) .name)) "key" (.secretKey | default "api.config.yaml") "days" (.validityDays | default 0 | int)) -}}
 {{- end -}}
 {{- toJson $out -}}
 {{- end }}

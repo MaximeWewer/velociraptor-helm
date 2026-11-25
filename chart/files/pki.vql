@@ -193,8 +193,10 @@ LET _e7 <= if(condition=AdminSecretName AND NOT (A[0].Response = 200 OR A[0].Res
               then=fail(msg=format(format="GET secret %v -> HTTP %v", args=[AdminSecretName, A[0].Response])))
 
 -- ── 5. API client certificates ──────────────────────────────────────────────────────
--- One Secret per declared API client: issued when missing (delete it to rotate), re-issued
--- when it expires within RenewBeforeDays. Only the certificate is made here (signing needs
+-- One Secret per declared API client: issued when missing, re-issued when it expires within
+-- RenewBeforeDays (or a third of its validityDays, if shorter) and when the Secret holds the
+-- certificate of another client (renamed client, fixed secretName). Deleting the Secret only
+-- re-issues: revocation is the reconciler's job (a removed / renamed client's user is deleted). Only the certificate is made here (signing needs
 -- the CA, not the datastore); the reconciler sidecar grants the roles through the API.
 LET Clients <= parse_json_array(data=ApiClients || "[]")
 LET CS <= if(condition=Clients AND NOT OK1 AND ConfigSecret, then=getSecret(name=ConfigSecret))
@@ -206,10 +208,23 @@ LET _w4 <= if(condition=Clients AND ApiBase,
               then=copy(accessor="data", filename=ApiBase, dest=WorkDir + "/api-base.yaml"))
 
 LET apiYaml(text) = parse_yaml(filename=text, accessor="data")
-LET issueApiClient(name) = SELECT read_file(filename=WorkDir + "/api-" + name + ".yaml") AS Text, ReturnCode
-  FROM run(argv=[Bin, "--nobanner", "--config", WorkDir + "/api-base.yaml", "config", "api_client",
-                 "--name", name, WorkDir + "/api-" + name + ".yaml"])
-  WHERE Complete
+-- `config api_client` signs for security.certificate_validity_days: override it in a per-client
+-- copy of the base config when validityDays is set.
+LET withValidity(text, days) = if(condition=days,
+    then=regex_replace(
+      source=regex_replace(source=regex_replace(source=text,
+               re='''(?m)^  certificate_validity_days: .*\n''', replace=""),
+             re='''(?m)^security: \{\}$''', replace="security:"),
+      re='''(?m)^security:$''', replace="security:\n  certificate_validity_days: " + str(str=days)),
+    else=text)
+LET issueApiClient(name, days) = SELECT read_file(filename=WorkDir + "/api-" + name + ".yaml") AS Text, ReturnCode
+  FROM foreach(row={
+    SELECT copy(accessor="data", dest=WorkDir + "/api-base-" + name + ".yaml",
+                filename=withValidity(text=read_file(filename=WorkDir + "/api-base.yaml"), days=days)) AS Base
+    FROM scope() }, query={
+    SELECT * FROM run(argv=[Bin, "--nobanner", "--config", Base, "config", "api_client",
+                            "--name", name, WorkDir + "/api-" + name + ".yaml"])
+    WHERE Complete })
 LET apiSecretData(key, text) = to_dict(item={
   SELECT * FROM foreach(row={SELECT apiYaml(text=text) AS Y FROM scope()}, query={
     SELECT * FROM chain(
@@ -221,24 +236,30 @@ LET apiSecretData(key, text) = to_dict(item={
   })
 })
 
-LET Api1 <= SELECT name, secret, key, Response AS Status, Content FROM foreach(row=Clients, query={
-  SELECT name, secret, key, Response, Content
+LET Api1 <= SELECT name, secret, key, days, Response AS Status, Content FROM foreach(row=Clients, query={
+  SELECT name, secret, key, days, Response, Content
   FROM k8s(method="GET", url=SecretsURL + "/" + secret, body="", ctype="application/json", params=dict())
 })
-LET Api2 <= SELECT name, secret, key, Status,
+LET Api2 <= SELECT name, secret, key, days, Status,
        if(condition=Status = 200,
-          then=certDays(pem=apiYaml(text=secretValue(row=dict(Content=Content), key=key)).client_cert)) AS Days
+          then=certDays(pem=apiYaml(text=secretValue(row=dict(Content=Content), key=key)).client_cert)) AS Days,
+       if(condition=Status = 200,
+          then=get(item=parse_json(data=Content).metadata.annotations,
+                   field="velociraptor.app/api-client")) AS Holder,
+       if(condition=days AND days / 3 < int(int=RenewBeforeDays),
+          then=int(int=days / 3), else=int(int=RenewBeforeDays)) AS RenewAt
   FROM Api1
 LET _e9 <= SELECT fail(msg=format(format="apiClients: GET secret %v -> HTTP %v", args=[secret, Status]))
   FROM Api2 WHERE NOT (Status = 200 OR Status = 404)
-LET Api3 <= SELECT name, secret, key, Status, Days,
+LET Api3 <= SELECT name, secret, key, days, Status, Days,
        if(condition=Status = 404, then="created",
-          else=if(condition=Status = 200 AND Days < int(int=RenewBeforeDays), then="renewed",
-                  else="present")) AS Action
+          else=if(condition=Status = 200 AND Holder AND Holder != name, then="reissued",
+          else=if(condition=Status = 200 AND Days < RenewAt, then="renewed",
+                  else="present"))) AS Action
   FROM Api2 WHERE Status = 200 OR Status = 404
 LET Api4 <= SELECT name, secret, key, Action,
        if(condition=Action != "present",
-          then=regex_replace(source=issueApiClient(name=name)[0].Text,
+          then=regex_replace(source=issueApiClient(name=name, days=days)[0].Text,
                              re="api_connection_string: .*",
                              replace="api_connection_string: " + ApiConnection)) AS Text
   FROM Api3
@@ -253,16 +274,18 @@ LET ApiDone <= SELECT name, secret, Action,
                        `velociraptor.app/api-client`=name,
                        `velociraptor.app/created-at`=Now)),
                      data=apiSecretData(key=key, text=Text))))[0].Response,
-          else=if(condition=Action = "renewed",
+          else=if(condition=Action = "renewed" OR Action = "reissued",
                   then=k8s(method="PATCH", url=SecretsURL + "/" + secret,
                            ctype="application/merge-patch+json", params=dict(),
                            body=serialize(format="json", item=dict(
-                             metadata=dict(annotations=dict(`velociraptor.app/renewed-at`=Now)),
+                             metadata=dict(annotations=dict(`velociraptor.app/renewed-at`=Now,
+                                                            `velociraptor.app/api-client`=name)),
                              data=apiSecretData(key=key, text=Text))))[0].Response)) AS Response
   FROM Api4
 LET _e10 <= SELECT fail(msg=format(format="apiClients: %v secret %v -> HTTP %v", args=[Action, secret, Response]))
   FROM ApiDone
-  WHERE (Action = "created" AND Response != 201) OR (Action = "renewed" AND Response != 200)
+  WHERE (Action = "created" AND Response != 201)
+       OR ((Action = "renewed" OR Action = "reissued") AND Response != 200)
        OR (Action != "present" AND NOT Response)
 
 SELECT SecretName AS Secret, Source, Renew AS Renewed,

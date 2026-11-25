@@ -22,6 +22,7 @@ apiClients:
   - name: ci-client
     roles: [api, reader]
     permissions: [EXECVE, NETWORK]
+    validityDays: 30
 state:
   orgs:
     - id: root

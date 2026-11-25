@@ -1,7 +1,7 @@
 {{- if eq (include "velociraptor.apiServed" .) "true" }}
-# Master API (gRPC, mTLS with API client certificates): minions (RemoteFileDataStore) and
-# api.expose clients. API.hostname is set to {{ include "velociraptor.fullname" . }}-api.{{ .Release.Namespace }}.svc
-# when the chart manages the config.
+# Master API (gRPC, mTLS with API client certificates), dialed by minions (RemoteFileDataStore)
+# and api.expose clients at {{ include "velociraptor.fullname" . }}-api.{{ .Release.Namespace }}.svc when the chart manages
+# the config. The master pod itself uses the loopback (no hairpin through this Service).
 apiVersion: v1
 kind: Service
 metadata:

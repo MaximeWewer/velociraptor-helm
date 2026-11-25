@@ -712,8 +712,14 @@ oauth_client_secret
 {{- end -}}
 {{- end }}
 
-{{/* Init container that deep-merges the chart overlay onto the base config. */}}
+{{/* Init container that deep-merges the chart overlay onto the base config.
+     Called with (dict "ctx" $ "master" bool). On the master, API.hostname is pinned to the
+     loopback: the GUI's gRPC gateway (and in-pod API clients) dial API.hostname, and going
+     through the pod's own API Service hairpins, which some CNIs masquerade and the
+     NetworkPolicy then drops. Minions keep the Service hostname to reach the master. */}}
 {{- define "velociraptor.overlayInitContainer" -}}
+{{- $master := .master }}
+{{- with .ctx }}
 {{- if eq (include "velociraptor.overlayEnabled" .) "true" }}
 - name: config-merge
   image: {{ .Values.config.overlay.image.repository }}:{{ .Values.config.overlay.image.tag }}{{ with .Values.config.overlay.image.digest }}@{{ . }}{{ end }}
@@ -726,6 +732,9 @@ oauth_client_secret
         /base/{{ .Values.config.secretKey }} /overlay/overlay.yaml \
         {{- if .Values.gui.oidc.enabled }}
         | CLIENT_SECRET="$CLIENT_SECRET" yq '.GUI.authenticator.oauth_client_secret = strenv(CLIENT_SECRET)' \
+        {{- end }}
+        {{- if and $master (eq (include "velociraptor.apiServed" .) "true") (eq (include "velociraptor.manageServerConfig" .) "true") }}
+        | yq '.API.hostname = "127.0.0.1"' \
         {{- end }}
         > /merged/{{ base .Values.config.mountPath }}
   {{- if .Values.gui.oidc.enabled }}
@@ -747,6 +756,7 @@ oauth_client_secret
       readOnly: true
     - name: config
       mountPath: /merged
+{{- end }}
 {{- end }}
 {{- end }}
 

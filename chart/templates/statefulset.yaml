@@ -38,7 +38,7 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- /* Order matters: merge the config, create the admin, then the orgs API client + sidecar. */}}
-      {{- $init := printf "%s\n%s\n%s\n%s" (include "velociraptor.overlayInitContainer" .) (include "velociraptor.adminInitContainer" .) (include "velociraptor.orgsInitContainers" .) (include "velociraptor.backupSidecar" .) }}
+      {{- $init := printf "%s\n%s\n%s\n%s" (include "velociraptor.overlayInitContainer" (dict "ctx" . "master" true)) (include "velociraptor.adminInitContainer" .) (include "velociraptor.orgsInitContainers" .) (include "velociraptor.backupSidecar" .) }}
       {{- if or (trim $init) .Values.extraInitContainers }}
       initContainers:
         {{- with trim $init }}

@@ -1,10 +1,9 @@
 /*
   velociraptor-helm - issue the reconciler's in-memory API client certificate.
 
-  `config api_client` writes the connection string from API.hostname, i.e. the API Service
-  when api.expose / minions are on. The reconciler runs in the master pod: rewrite it to the
-  loopback, so it never hairpins through its own Service (some CNIs masquerade hairpin
-  traffic, which the NetworkPolicy then drops).
+  `config api_client` writes the connection string from API.hostname. The master's merged
+  config already pins it to 127.0.0.1; pin it here too, so that the reconciler never depends
+  on its own API Service (no endpoints until the pod is Ready, hairpin traffic).
   Inputs (--env): Config, Out, Port.
 */
 LET R <= SELECT * FROM execve(

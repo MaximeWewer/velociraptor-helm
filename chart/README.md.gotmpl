@@ -75,7 +75,7 @@ read-only root filesystem) and points agents at `localhost`.
 
 ### Certificate renewal disconnects running agents (upstream bug)
 
-Velociraptor clients (<= 0.77.3 and `master`) freeze "now" at process start when verifying the server
+Velociraptor clients (<= 0.77.4 and `master`) freeze "now" at process start when verifying the server
 certificate (`private_opts.CurrentTime` in `vql/networking/tls.go`), so a running agent **rejects any
 certificate issued after it started** (`x509: certificate is valid for VelociraptorServer, not <host>`),
 and it never restarts itself while the server is unreachable. Hence:
@@ -249,6 +249,9 @@ apiClients:
   refused with `PermissionDenied ... EXECVE`. List the missing ones in `permissions`
   (case-insensitive: `EXECVE` / `execve`) rather than granting `administrator`. An artifact's
   needs: `SELECT name, required_permissions FROM artifact_definitions() WHERE name = '...'`.
+- **`api` role required**: since Velociraptor 0.77.4 only `api` grants the right to run API queries
+  (`administrator` no longer implies it). A client without it is refused with
+  `PermissionDenied ... requires permission ANY_QUERY`.
 
 ## Declarative state (`state.orgs`)
 
@@ -285,7 +288,7 @@ alone. When you take over `clientMonitoring`, list the built-in entries you stil
   the GUI; needs egress to GitHub releases). To force a rebuild, delete the exported Secret.
   macOS `.pkg` is not built: Velociraptor has no pkg builder, and MDM-deployable packages must
   be signed and notarized with an Apple Developer ID.
-- The reconciler's API user grants itself `administrator` in every managed org: rights inherited
+- The reconciler's API user grants itself `administrator` + `api` in every managed org: rights inherited
   from root are not enough inside an org (e.g. collecting server artifacts there is denied).
 
 ## Backup (`backup.s3`)
@@ -347,7 +350,7 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `image.registry` / `image.repository` | `ghcr.io` / `maximewewer/velociraptor` | Hardened distroless rebuild ([velociraptor-docker](https://github.com/MaximeWewer/velociraptor-docker)) |
-| `image.tag` | `0.77.3-distroless` | Tag; prefer `image.digest` in production |
+| `image.tag` | `0.77.4-distroless` | Tag; prefer `image.digest` in production |
 | `replicaCount` | `1` | **master** pods - **must stay 1** (single-writer datastore); scale via `frontend.minions` |
 | `config.bootstrap.enabled` | `true` | Generate/keep the identity in-cluster when no `existingSecret`/`inline` |
 | `config.bootstrap.certificateValidityDays` | `3650` | Server certificate validity (renewals disconnect running agents) |

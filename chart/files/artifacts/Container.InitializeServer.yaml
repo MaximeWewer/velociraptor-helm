@@ -1,5 +1,5 @@
 # Copied verbatim from the official Velociraptor Docker image (AGPL-3.0):
-# https://github.com/Velocidex/velociraptor/blob/v0.77.3/Docker/custom_artifacts/InitializeServer.yaml
+# https://github.com/Velocidex/velociraptor/blob/v0.77.4/Docker/custom_artifacts/InitializeServer.yaml
 # The hardened distroless image does not ship it; the chart does (config.initializeServer).
 name: Container.InitializeServer
 description: |

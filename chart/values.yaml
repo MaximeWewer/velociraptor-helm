@@ -9,7 +9,7 @@ image:
   # Hardened distroless/rootless rebuild - built & published from
   # https://github.com/MaximeWewer/velociraptor-docker
   repository: maximewewer/velociraptor
-  tag: "0.77.3-distroless"
+  tag: "0.77.4-distroless"
   # Pin by digest in production (overrides tag): sha256:...
   digest: ""
   pullPolicy: IfNotPresent
@@ -64,7 +64,7 @@ config:
     importFrom: ""
     # Validity of the server certificates issued at generation and at each renewal.
     # Default = the CA's own lifetime (10 years), so a fresh install never renews: a
-    # renewal is DISRUPTIVE because of an upstream client bug (Velociraptor <= 0.77.3 and
+    # renewal is DISRUPTIVE because of an upstream client bug (Velociraptor <= 0.77.4 and
     # master): a running agent freezes "now" at process start when verifying the server
     # certificate, so it rejects any certificate issued after it started, and it never
     # restarts itself while the server is unreachable. After a renewal every running agent
@@ -283,8 +283,9 @@ api:
 ## server config's certificate validity: config.bootstrap.certificateValidityDays in bootstrap
 ## mode, 1 year for a raw `config generate`; consumers must reload the Secret on renewal). The reconciler sidecar grants `roles` in `orgs` through
 ## the API: the roles declared here are authoritative for these users. Include `api` (needed
-## to use the API) and the least privileges required, e.g. [api, investigator]; avoid
-## administrator. Out-of-pod clients also need api.expose.
+## to use the API; since 0.77.4 administrator alone no longer allows it) and the least
+## privileges required, e.g. [api, investigator]; avoid administrator. Out-of-pod clients
+## also need api.expose.
 apiClients: []
 #  - name: tracecat              # API user (certificate CN)
 #    roles: [api, investigator]
@@ -546,7 +547,7 @@ prometheusRule:
 ## Why not GUI.initial_orgs: it is only applied on the server's very first start, and
 ## org_create() refuses to run offline - so orgs must be created through the live API.
 ## The sidecar authenticates with an API client certificate issued at each pod start
-## (API user "velociraptor-helm", administrator role) and kept in memory only.
+## (API user "velociraptor-helm", administrator + api roles) and kept in memory only.
 ## Per-org client config (`config client --org` returns an empty nonce offline):
 ##   kubectl exec <fullname>-0 -c velociraptor -- /velociraptor --config <config.mountPath> \
 ##     query --format=jsonl "SELECT _client_config FROM orgs() WHERE OrgId = '<id>'" | jq -r ._client_config

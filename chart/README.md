@@ -214,6 +214,7 @@ api:
 apiClients:
   - name: tracecat
     roles: [api, investigator]   # `api` is required to use the API; least privilege
+    permissions: [EXECVE, NETWORK]  # extra permissions, see below
     orgs: [root]
 ```
 
@@ -223,9 +224,19 @@ apiClients:
   (`<fullname>-api.<ns>.svc:<port>`). Copy or sync it to the consumer's namespace.
 - **Rotate**: delete the Secret; the next install/upgrade/sync or CronJob run re-issues it.
   **Renewal**: re-issued when it expires within `renewBeforeDays` (same validity as the server
-  certificates); consumers must reload it.
-- The reconciler sidecar grants `roles` in `orgs` through the API: the declared roles are
-  authoritative for these users (a role removed here is revoked).
+  certificates). The previous certificate stays valid until its own expiry, so consumers have
+  that window to reload the Secret (mount it as a volume and re-read it, or restart on change).
+- **Revocation**: Velociraptor authenticates an API client by CA signature + user name, with
+  no revocation list: re-issuing does NOT invalidate a leaked certificate. Remove the client
+  from `apiClients`, delete the user (GUI, or `user_delete(user=..., really_do_it=TRUE)`), and
+  declare a client with a **new name** (recreating the same name revives the old certificate).
+- The reconciler sidecar grants `roles` and `permissions` in `orgs` through the API; both are
+  authoritative for these users (a role or permission removed here is revoked).
+- **Permissions**: artifacts can require more than a role grants. `investigator` can collect
+  `Windows.Memory.Acquisition`, but `Windows.Remediation.Quarantine` (EXECVE + NETWORK) is
+  refused with `PermissionDenied ... EXECVE`. List the missing ones in `permissions`
+  (case-insensitive: `EXECVE` / `execve`) rather than granting `administrator`. An artifact's
+  needs: `SELECT name, required_permissions FROM artifact_definitions() WHERE name = '...'`.
 
 ## Declarative state (`state.orgs`)
 
@@ -236,7 +247,7 @@ API every `state.reconcilePeriodSeconds`, org by org:
 
 | Section | Applies | Semantics |
 |---|---|---|
-| `users` | roles of OIDC/Basic accounts in the org | roles authoritative for the declared users; others untouched |
+| `users` | roles (+ `permissions`) of OIDC/Basic accounts in the org | roles and permissions authoritative for the declared users; others untouched |
 | `clientMonitoring` | permanent endpoint collections (`all`, per `labels`) | **authoritative**: the whole table is replaced, GUI edits are overwritten |
 | `serverMonitoring` | permanent server-side artifacts (forwarders to Wazuh/OpenSearch/Tracecat, auto-labelling) | **authoritative** |
 | `tools` | tools pinned by sha256 (optionally served by the server) | added/updated when the hash differs, never removed |

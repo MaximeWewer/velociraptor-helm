@@ -10,7 +10,7 @@
       within the last two intervals are sent, so each one goes out (at least) once.
   The S3 credentials are read from mounted files, never passed on a command line.
   Every IntervalSeconds; after 5 failed runs the program exits non-zero (kubelet restarts the
-  sidecar; the VelociraptorReconcilerFailing alert covers this container too).
+  sidecar and the VelociraptorBackupFailing alert fires).
 
   Inputs (--env): Bucket, Region, Endpoint, PathStyle, SkipVerify, Prefix, Sse, KmsKey,
   IntervalSeconds, IdentityFile (empty = skip), Release, BackupsGlob, CredsDir.

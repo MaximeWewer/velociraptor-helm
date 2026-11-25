@@ -297,7 +297,7 @@ volumes:
 {{- range .Values.state.orgs -}}
 {{- $o := dict "id" (.id | default "root") "clientMonitoring" "" "serverMonitoring" "" -}}
 {{- $users := list -}}
-{{- range .users }}{{ if not (and .name .roles) }}{{ fail "state.orgs[].users[] needs a name and roles" }}{{ end }}{{ $users = append $users (dict "name" .name "roles" .roles) }}{{ end -}}
+{{- range .users }}{{ if not (and .name .roles) }}{{ fail "state.orgs[].users[] needs a name and roles" }}{{ end }}{{ $users = append $users (dict "name" .name "roles" .roles "policy" (include "velociraptor.policyJson" .permissions)) }}{{ end -}}
 {{- $_ := set $o "users" $users -}}
 {{- if .clientMonitoring -}}
 {{- $cm := dict "artifacts" (include "velociraptor.collectorArgs" (.clientMonitoring.all | default list) | fromJson) -}}
@@ -343,10 +343,18 @@ volumes:
 {{- end }}
 
 {{/* API clients as the reconciler sees them: [{name, roles, orgs}]. */}}
+{{/* Extra permissions on top of the roles, as the JSON policy user_grant expects
+     ({"execve": true, ...}); "" when none. Names are case-insensitive (EXECVE = execve). */}}
+{{- define "velociraptor.policyJson" -}}
+{{- $p := dict -}}
+{{- range . }}{{ $_ := set $p (lower .) true }}{{ end -}}
+{{- if $p }}{{ toJson $p }}{{ end -}}
+{{- end }}
+
 {{- define "velociraptor.apiClientsGrants" -}}
 {{- $out := list -}}
 {{- range .Values.apiClients -}}
-{{- $out = append $out (dict "name" .name "roles" .roles "orgs" (.orgs | default (list "root"))) -}}
+{{- $out = append $out (dict "name" .name "roles" .roles "orgs" (.orgs | default (list "root")) "policy" (include "velociraptor.policyJson" .permissions)) -}}
 {{- end -}}
 {{- toJson $out -}}
 {{- end }}

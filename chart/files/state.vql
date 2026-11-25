@@ -43,10 +43,12 @@ LET Managed <= parse_json_array(data=ManagedOrgs)
 LET SelfGranted <= if(condition=Managed,
     then=user_grant(user=ApiUser, roles=["administrator"], orgs=Managed))
 
--- Roles are authoritative: user_grant replaces them, but needs an existing user.
-LET setRoles(name, roles, orgs) = if(condition=user(user=name).name,
-    then=user_grant(user=name, roles=roles, orgs=orgs),
-    else=user_create(user=name, roles=roles, orgs=orgs))
+-- Roles and extra permissions are authoritative: user_grant replaces both (no policy = roles
+-- only), but needs an existing user, hence user_create first. policy: JSON string or "".
+LET setRoles(name, roles, orgs, policy) = if(
+    condition=user(user=name).name OR user_create(user=name, roles=roles, orgs=orgs),
+    then=user_grant(user=name, roles=roles, orgs=orgs,
+                    policy=if(condition=policy, then=parse_json(data=policy))))
 
 -- Most recent hunt carrying the chart's tag (create_time, microseconds).
 LET lastHunt(htag) = SELECT create_time FROM hunts() WHERE htag in tags
@@ -54,7 +56,7 @@ LET lastHunt(htag) = SELECT create_time FROM hunts() WHERE htag in tags
 
 -- Applied inside query(org_id=...): every call below acts on that org.
 LET applyOrg = SELECT
-    { SELECT name, setRoles(name=name, roles=roles, orgs=[OrgId]) AS Granted
+    { SELECT name, setRoles(name=name, roles=roles, orgs=[OrgId], policy=policy) AS Granted
       FROM foreach(row=UserList) } AS Users,
     if(condition=ClientMonitoring,
        then=set_client_monitoring(value=parse_json(data=ClientMonitoring)).version) AS ClientMonitoring,
@@ -84,7 +86,7 @@ LET applyOrg = SELECT
 SELECT Wanted.id AS Declared, CreatedOrgs AS Created, SelfGranted,
        if(condition=Admin AND Wanted,
           then=user_grant(user=Admin, roles=["administrator"], orgs=Wanted.id)) AS AdminGranted,
-       { SELECT name, roles, orgs, setRoles(name=name, roles=roles, orgs=orgs) AS Granted
+       { SELECT name, roles, orgs, setRoles(name=name, roles=roles, orgs=orgs, policy=policy) AS Granted
          FROM foreach(row=Clients) } AS ApiClients,
        { SELECT * FROM foreach(row=States, query={
            -- query() opens a fresh scope: copy the helper definitions into it.

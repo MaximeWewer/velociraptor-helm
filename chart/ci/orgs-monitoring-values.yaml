@@ -21,6 +21,7 @@ api:
 apiClients:
   - name: ci-client
     roles: [api, reader]
+    permissions: [EXECVE, NETWORK]
 state:
   orgs:
     - id: root

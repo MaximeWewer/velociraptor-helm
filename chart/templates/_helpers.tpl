@@ -139,6 +139,8 @@ containers:
     image: {{ include "velociraptor.image" . }}
     imagePullPolicy: {{ .Values.image.pullPolicy }}
     args:
+      # -v: without it `velociraptor query` only prints ERROR logs (warnings would be lost).
+      - -v
       - query
       - --nobanner
       - --format=jsonl

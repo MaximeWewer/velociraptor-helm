@@ -118,11 +118,11 @@ LET _e3 <= if(condition=Renew AND NOT After.frontend > int(int=RenewBeforeDays),
               then=fail(msg=format(format="renewal produced a certificate valid %v days only",
                                    args=After.frontend)))
 LET _w2 <= if(condition=Renew AND Source != "generated",
-              then=log(level="WARNING", message="pki: server certificates renewed. Agents running since before %v will reject the new certificate until their process restarts (upstream client bug, Velociraptor <= 0.77.3): restart them (see config.bootstrap.certificateValidityDays in values.yaml).", args=Now))
+              then=log(level="WARN", message="pki: server certificates renewed. Agents running since before %v will reject the new certificate until their process restarts (upstream client bug, Velociraptor <= 0.77.3): restart them (see config.bootstrap.certificateValidityDays in values.yaml).", args=Now))
 LET CAMsg <= format(format="the CA itself expires in %v days. It cannot be rotated without re-enrolling every agent: plan a migration.", args=After.ca)
 LET _w3 <= if(condition=OK1 AND After.ca < int(int=CAWarnDays),
               then=if(condition=Context = "cron", then=fail(msg=CAMsg),
-                      else=log(level="WARNING", message="pki: %v", args=CAMsg)))
+                      else=log(level="WARN", message="pki: %v", args=CAMsg)))
 LET OK2 <= OK1 AND (NOT Renew OR After.frontend > int(int=RenewBeforeDays))
 
 -- ── 3. Persist ──────────────────────────────────────────────────────────────────────

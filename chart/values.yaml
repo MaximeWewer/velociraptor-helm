@@ -538,7 +538,48 @@ orgs:
   items: []
   #  - id: O01
   #    name: "Customer A"
+  # Reconcile period and sidecar resources: state.reconcilePeriodSeconds / state.resources.
+
+## Declarative per-org state, applied through the server API by the reconciler sidecar
+## (chart/files/state.vql), every reconcilePeriodSeconds. Needs Kubernetes >= 1.29.
+## Two rules:
+##  - clientMonitoring / serverMonitoring are AUTHORITATIVE: the whole event table is replaced
+##    (GUI edits are overwritten; built-in entries you still want, e.g. the Quarantine label
+##    event Windows.Remediation.QuarantineMonitor, must be listed). Omit a section to leave it
+##    alone.
+##  - the other sections only ADD: users (roles authoritative for the declared users only),
+##    tools, secrets and hunts are never deleted.
+## A non-root org must exist (declare it in orgs.items).
+state:
   reconcilePeriodSeconds: 60
+  orgs: []
+  #  - id: root
+  #    users:                       # OIDC/Basic accounts and their roles in this org
+  #      - name: analyst@example.com
+  #        roles: [investigator]
+  #    clientMonitoring:            # permanent endpoint collections
+  #      all: [Generic.Client.Stats]
+  #      labels:
+  #        windows: [Windows.Events.ProcessCreation]
+  #        Quarantine: [Windows.Remediation.QuarantineMonitor]
+  #    serverMonitoring:            # permanent server-side artifacts (forwarders, labelling...)
+  #      - Server.Monitor.Health
+  #      - name: Custom.Server.AutoLabel
+  #        parameters: {Interval: "3600"}
+  #    tools:                       # pinned by sha256, served by the server
+  #      - name: WinPmem64
+  #        url: https://github.com/Velocidex/WinPmem/releases/download/v4.0.rc1/winpmem_mini_x64_rc2.exe
+  #        hash: sha256:<hex>
+  #        serveLocally: true
+  #    secrets:                     # VQL secrets; the value is a JSON object of the type's fields,
+  #      - name: tracecat-webhook   # read server-side from the mounted Secret (never logged)
+  #        type: HTTP Secrets       # exact type_name: SELECT type_name FROM secrets()
+  #        fromSecret: {name: velociraptor-vql-secrets, key: tracecat}
+  #    hunts:                       # re-launched when the last one is older than `every`
+  #      - name: weekly-autoruns
+  #        artifacts: [Windows.Sys.Autoruns]
+  #        labels: [windows]
+  #        every: 7d                # 90s / 15m / 12h / 7d or seconds; expires defaults to every
   # Idle loop ~48Mi + a short-lived API client ~48Mi at each period.
   resources:
     requests:

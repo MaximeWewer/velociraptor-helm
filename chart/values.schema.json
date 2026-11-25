@@ -252,9 +252,32 @@
               "name": { "type": "string", "minLength": 1 }
             }
           }
-        },
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "properties": {
         "reconcilePeriodSeconds": { "type": "integer", "minimum": 10 },
-        "resources": { "type": "object" }
+        "resources": { "type": "object" },
+        "orgs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "users": { "type": "array" },
+              "clientMonitoring": {
+                "type": "object",
+                "properties": { "all": { "type": "array" }, "labels": { "type": "object" } }
+              },
+              "serverMonitoring": { "type": "array" },
+              "tools": { "type": "array" },
+              "secrets": { "type": "array" },
+              "hunts": { "type": "array" }
+            }
+          }
+        }
       }
     },
     "prometheusRule": {

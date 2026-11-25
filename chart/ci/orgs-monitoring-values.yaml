@@ -21,3 +21,9 @@ api:
 apiClients:
   - name: ci-client
     roles: [api, reader]
+state:
+  orgs:
+    - id: root
+      users:
+        - {name: ci-user, roles: [reader]}
+      serverMonitoring: [Server.Monitor.Health]

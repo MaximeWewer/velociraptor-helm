@@ -114,7 +114,7 @@ orgs:
 Each org has its own clients, hunts, users and client config (own nonce). `GUI.initial_orgs` is only
 applied on the server's very first start and `org_create()` refuses to run offline, so the chart
 reconciles orgs **through the live API**: an init container issues an in-memory API client certificate,
-then a native sidecar ([`files/orgs.vql`](files/orgs.vql)) creates the missing orgs and grants
+then a native sidecar ([`files/state.vql`](files/state.vql)) creates the missing orgs and grants
 `gui.initialAdmin` the administrator role in them every `reconcilePeriodSeconds`. Orgs are never renamed
 or deleted by the chart. Per-org client config (`config client --org` returns an empty nonce offline):
 
@@ -223,6 +223,27 @@ apiClients:
 - The reconciler sidecar grants `roles` in `orgs` through the API: the declared roles are
   authoritative for these users (a role removed here is revoked).
 
+## Declarative state (`state.orgs`)
+
+Much of Velociraptor's state is only applied on the server's very first start
+(`GUI.initial_orgs`, `Frontend.default_client_monitoring_artifacts`) or only through the API.
+The reconciler sidecar ([`files/state.vql`](files/state.vql)) applies `state.orgs` through the
+API every `state.reconcilePeriodSeconds`, org by org:
+
+| Section | Applies | Semantics |
+|---|---|---|
+| `users` | roles of OIDC/Basic accounts in the org | roles authoritative for the declared users; others untouched |
+| `clientMonitoring` | permanent endpoint collections (`all`, per `labels`) | **authoritative**: the whole table is replaced, GUI edits are overwritten |
+| `serverMonitoring` | permanent server-side artifacts (forwarders to Wazuh/OpenSearch/Tracecat, auto-labelling) | **authoritative** |
+| `tools` | tools pinned by sha256 (optionally served by the server) | added/updated when the hash differs, never removed |
+| `secrets` | VQL secrets (`HTTP Secrets`, `Elastic Creds`, ...) | added/updated; the value is read **server-side** from a mounted Secret file, so it never appears in the query text the server logs |
+| `hunts` | recurring hunts, tagged `helm:<name>` | a new hunt when the last one is older than `every`; never deleted |
+
+Monitoring entries are artifact names or `{name, parameters}`. Omit a section to leave it
+alone. When you take over `clientMonitoring`, list the built-in entries you still need (e.g. the
+`Quarantine` label event `Windows.Remediation.QuarantineMonitor`). A non-root org must exist
+(`orgs.items`). See `values.yaml` for a full example.
+
 ## Extension points
 
 - `extraObjects`: raw manifests (maps or strings) rendered through `tpl`, e.g. a responder
@@ -286,6 +307,7 @@ Velociraptor exports no certificate-expiry metric, so the **certificate CronJob 
 | `customArtifacts.existingConfigMaps` | `[]` | Extra artifact ConfigMaps projected into the same directory |
 | `api.expose.enabled` / `api.expose.allowedFrom` | `false` / `[]` | Serve the API on the `<fullname>-api` Service to the declared peers |
 | `apiClients` | `[]` | API client certificates (Secrets) + roles granted through the API |
+| `state.orgs` | `[]` | Per-org users, client/server monitoring, tools, VQL secrets, recurring hunts |
 | `extraObjects` / `extraContainers` / `extraInitContainers` | `[]` | Escape hatches (rendered through `tpl`) |
 | `frontend.minions.enabled` | `false` | Multi-frontend (master/minion); requires a RWX `persistence.existingClaim` |
 | `frontend.service.type` | `LoadBalancer` | Frontend exposure (endpoint clients) |

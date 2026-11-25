@@ -1,0 +1,122 @@
+/*
+  velociraptor-helm - declarative state reconciler (orgs, API client roles, per-org state).
+
+  Why: much of Velociraptor's state is only applied on the server's very FIRST start
+  (GUI.initial_orgs, Frontend.default_client_monitoring_artifacts...) or only through the API
+  (org_create(), roles, monitoring tables, tools, VQL secrets, hunts). This program runs in a
+  native sidecar of the master and does not exit on start-up failures (a native sidecar that
+  crash-loops would delay the server's own start). Every Period seconds it runs `Inner`
+  through the API client (`--api_config`, in-pod) to:
+    - create the declared orgs that do not exist yet (never renames, never deletes);
+    - grant the initial admin the administrator role in every declared org;
+    - grant the API clients their roles (authoritative for those users);
+    - per org in State:
+        users             roles authoritative for the declared users (others untouched)
+        clientMonitoring  the whole client event table (authoritative, GUI edits overwritten)
+        serverMonitoring  the whole server event table (authoritative)
+        tools             added / updated when the declared hash differs (never removed)
+        secrets           VQL secrets, values read SERVER-SIDE from a mounted Secret file:
+                          they never appear in the query text the server logs
+        hunts             re-launched when the last hunt tagged helm:<name> is older than
+                          `every` (never deleted)
+  After 5 failed attempts the program exits non-zero: kubelet restarts the sidecar, and the
+  PrometheusRule alert VelociraptorReconcilerFailing fires on those restarts.
+
+  Inputs (--env): Bin, ApiConfig, Orgs, Admin, ApiClients, State (JSON, prepared by the chart),
+  Period (seconds).
+*/
+
+LET Inner = '''
+LET Wanted <= parse_json_array(data=Orgs)
+LET Existing <= SELECT OrgId FROM orgs()
+LET Missing <= SELECT id, name FROM foreach(row=Wanted) WHERE NOT (id in Existing.OrgId)
+LET Clients <= parse_json_array(data=ApiClients)
+LET States <= parse_json_array(data=State)
+
+-- Roles are authoritative: user_grant replaces them, but needs an existing user.
+LET setRoles(name, roles, orgs) = if(condition=user(user=name).name,
+    then=user_grant(user=name, roles=roles, orgs=orgs),
+    else=user_create(user=name, roles=roles, orgs=orgs))
+
+-- Most recent hunt carrying the chart's tag (create_time, microseconds).
+LET lastHunt(htag) = SELECT create_time FROM hunts() WHERE htag in tags
+  ORDER BY create_time DESC LIMIT 1
+
+-- Applied inside query(org_id=...): every call below acts on that org.
+LET applyOrg = SELECT
+    { SELECT name, setRoles(name=name, roles=roles, orgs=[OrgId]) AS Granted
+      FROM foreach(row=UserList) } AS Users,
+    if(condition=ClientMonitoring,
+       then=set_client_monitoring(value=parse_json(data=ClientMonitoring)).version) AS ClientMonitoring,
+    if(condition=ServerMonitoring,
+       then=set_server_monitoring(value=parse_json(data=ServerMonitoring)).artifacts) AS ServerMonitoring,
+    { SELECT name,
+             if(condition=inventory_get(tool=name).Definition.hash = hash, then="present",
+                else=inventory_add(tool=name, url=url, hash=hash, serve_locally=serveLocally,
+                                   filename=filename, version=version).name) AS Tool
+      FROM foreach(row=ToolList) } AS Tools,
+    { SELECT name, secret_add(name=name, type=type,
+                              secret=parse_json(data=read_file(filename=file))) AS Secret
+      FROM foreach(row=SecretList) } AS Secrets,
+    { SELECT name, Last,
+             if(condition=NOT Last OR (now() - Last / 1000000) >= everySeconds,
+                then=hunt(description="helm: " + name, tags=[tag], artifacts=artifacts,
+                          spec=if(condition=spec, then=parse_json(data=spec)),
+                          include_labels=labels, os=os,
+                          expires=now() + expiresSeconds).HuntId,
+                else="recent") AS Hunt
+      FROM foreach(row=HuntList, query={
+        SELECT name, tag, artifacts, spec, labels, os, everySeconds, expiresSeconds,
+               lastHunt(htag=tag)[0].create_time AS Last
+        FROM scope() }) } AS Hunts
+  FROM scope()
+
+SELECT Wanted.id AS Declared,
+       { SELECT id, org_create(name=name, org_id=id).id AS OrgId FROM Missing } AS Created,
+       if(condition=Admin AND Wanted,
+          then=user_grant(user=Admin, roles=["administrator"], orgs=Wanted.id)) AS AdminGranted,
+       { SELECT name, roles, orgs, setRoles(name=name, roles=roles, orgs=orgs) AS Granted
+         FROM foreach(row=Clients) } AS ApiClients,
+       { SELECT * FROM foreach(row=States, query={
+           -- query() opens a fresh scope: copy the helper definitions into it.
+           SELECT id AS Org, * FROM query(org_id=id, query=applyOrg,
+             copy_env=["setRoles", "lastHunt"], env=dict(
+             -- the chart always provides these lists (possibly empty)
+             OrgId=id, UserList=users, ClientMonitoring=clientMonitoring,
+             ServerMonitoring=serverMonitoring, ToolList=tools, SecretList=secrets,
+             HuntList=hunts))
+         }) } AS State
+FROM scope()
+'''
+
+LET call(vql) = SELECT * FROM execve(
+    argv=[Bin, "--api_config", ApiConfig, "--nobanner", "query", "--format=jsonl",
+          "--env", "Orgs=" + Orgs, "--env", "Admin=" + Admin,
+          "--env", "ApiClients=" + ApiClients, "--env", "State=" + State, vql],
+    sep="\x00\x00", length=10000000)
+
+LET attempt = SELECT * FROM foreach(row={
+  SELECT timestamp(epoch=now()) AS Time,
+       R[-1].ReturnCode = 0 AS OK,
+       if(condition=R[-1].ReturnCode = 0,
+          then=parse_json(data=join(array=R.Stdout, sep="")),
+          else=regex_replace(source=join(array=R.Stderr, sep=""),
+                             re='''(?s)^.*(velociraptor: error: [^\n]*).*$''', replace="$1")
+               || "server API not reachable yet, will retry") AS Result
+  FROM foreach(row={SELECT call(vql=Inner) AS R FROM scope()})
+}, query={
+  SELECT Time, OK, Result,
+         log(level=if(condition=OK, then="INFO", else="WARN"),
+             message="reconcile: %v", dedup=-1,
+             args=regex_replace(source=serialize(item=dict(OK=OK, Result=Result)),
+                                re='''\s*\n\s*''', replace=" ")) AS Logged
+  FROM scope()
+})
+
+-- Only failed attempts reach the LIMIT: 5 failures end the loop.
+SELECT Time, Result FROM foreach(row={SELECT * FROM clock(period=int(int=Period), start=0)},
+                                 query=attempt)
+WHERE NOT OK
+LIMIT 5
+
+SELECT log(level="ERROR", message="reconcile: 5 failed attempts, exiting so that kubelet restarts the sidecar") FROM scope()

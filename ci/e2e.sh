@@ -43,7 +43,7 @@ trap cleanup EXIT
 dump() {  # diagnostics for a namespace
   kubectl get pods,jobs,secrets -n "$1" || true
   kubectl describe pod -n "$1" "$REL-0" 2>/dev/null | tail -25 || true
-  for c in config-merge ensure-admin velociraptor orgs-reconciler; do
+  for c in config-merge ensure-admin velociraptor state-reconciler; do
     echo "--- $c"; kubectl logs -n "$1" "$REL-0" -c "$c" --tail=30 2>/dev/null || true
   done
 }
@@ -121,12 +121,16 @@ check "same CA after upgrade" test "$(ca_hash $NS_A)" = "$CA0"
 check "same server certificate after upgrade" test "$(fe_cert $NS_A)" = "$FE0"
 
 log "C. orgs and API clients through the API"
-install $NS_A --set 'orgs.items[0].id=O01' --set 'orgs.items[0].name=E2E org' --set orgs.reconcilePeriodSeconds=15 \
-  --set api.expose.enabled=true --set 'apiClients[0].name=e2e-client' --set 'apiClients[0].roles={api,reader}'
-orgs_ok() { for _ in $(seq 1 24); do kubectl logs -n $NS_A $REL-0 -c orgs-reconciler 2>/dev/null | grep -q '"Granted": "e2e-client"' && return 0; sleep 5; done; return 1; }
+install $NS_A --set 'orgs.items[0].id=O01' --set 'orgs.items[0].name=E2E org' --set state.reconcilePeriodSeconds=15 \
+  --set api.expose.enabled=true --set 'apiClients[0].name=e2e-client' --set 'apiClients[0].roles={api,reader}' \
+  --set 'state.orgs[0].id=root' --set 'state.orgs[0].users[0].name=e2e-user' --set 'state.orgs[0].users[0].roles={reader}' \
+  --set 'state.orgs[0].serverMonitoring={Server.Monitor.Health}'
+orgs_ok() { for _ in $(seq 1 24); do kubectl logs -n $NS_A $REL-0 -c state-reconciler 2>/dev/null | grep -q '"Granted": "e2e-client"' && return 0; sleep 5; done; return 1; }
 check "org O01 reconciled" orgs_ok
 check "org O01 exists" bash -c "kubectl exec -n $NS_A $REL-0 -c velociraptor -- /velociraptor --nobanner --config /etc/velociraptor/server.config.yaml query --format=jsonl \"SELECT OrgId FROM orgs()\" 2>/dev/null | grep -q O01"
 
+state_ok() { kubectl logs -n $NS_A $REL-0 -c state-reconciler 2>/dev/null | grep 'reconcile:' | tail -1 | grep -q '"Granted": "e2e-user".*"ServerMonitoring": \[ "Server.Monitor.Health" \]'; }
+check "state applied (org user role, server monitoring table)" state_ok
 check "API client Secret issued" test "$(kubectl get secret $REL-api-e2e-client -n $NS_A -o jsonpath='{.data}' | jq -r 'keys|join(",")')" = "api.config.yaml,ca.crt,endpoint,tls.crt,tls.key"
 api_query() {  # a pod of the release (allowed by the NetworkPolicy) using the client Secret
   kubectl run "apic-$RANDOM" -n $NS_A --rm -i --restart=Never --quiet \

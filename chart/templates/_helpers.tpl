@@ -230,7 +230,91 @@ volumes:
 
 {{/* "true" when the API reconciler sidecar runs (orgs and/or API client roles to apply). */}}
 {{- define "velociraptor.reconcilerEnabled" -}}
-{{- if or .Values.orgs.items .Values.apiClients -}}true{{- end -}}
+{{- if or .Values.orgs.items .Values.apiClients .Values.state.orgs -}}true{{- end -}}
+{{- end }}
+
+{{/* Seconds from an int or a duration string ("90s", "15m", "12h", "7d"). */}}
+{{- define "velociraptor.seconds" -}}
+{{- $v := toString . -}}
+{{- if regexMatch "^[0-9]+$" $v -}}{{ $v }}
+{{- else if regexMatch "^[0-9]+[smhd]$" $v -}}
+{{- $n := int (trimSuffix (regexFind "[smhd]$" $v) $v) -}}
+{{- $u := regexFind "[smhd]$" $v -}}
+{{- if eq $u "s" }}{{ $n }}{{ else if eq $u "m" }}{{ mul $n 60 }}{{ else if eq $u "h" }}{{ mul $n 3600 }}{{ else }}{{ mul $n 86400 }}{{ end -}}
+{{- else -}}{{ fail (printf "invalid duration %q (use an integer of seconds or 90s / 15m / 12h / 7d)" $v) }}
+{{- end -}}
+{{- end }}
+
+{{/* ArtifactCollectorArgs (protobuf JSON shape) from a list of artifact names or
+     {name, parameters: {key: value}} entries. */}}
+{{- define "velociraptor.collectorArgs" -}}
+{{- $names := list -}}{{- $specs := list -}}
+{{- range . -}}
+{{- if kindIs "string" . -}}
+{{- $names = append $names . -}}
+{{- else -}}
+{{- $names = append $names .name -}}
+{{- if .parameters -}}
+{{- $env := list -}}
+{{- range $k, $v := .parameters }}{{ $env = append $env (dict "key" $k "value" (toString $v)) }}{{ end -}}
+{{- $specs = append $specs (dict "artifact" .name "parameters" (dict "env" $env)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $out := dict "artifacts" $names -}}
+{{- if $specs }}{{ $_ := set $out "specs" $specs }}{{ end -}}
+{{- toJson $out -}}
+{{- end }}
+
+{{/* Per-org state for chart/files/state.vql, as JSON. */}}
+{{- define "velociraptor.stateJson" -}}
+{{- $out := list -}}
+{{- range .Values.state.orgs -}}
+{{- $o := dict "id" (.id | default "root") "clientMonitoring" "" "serverMonitoring" "" -}}
+{{- $users := list -}}
+{{- range .users }}{{ if not (and .name .roles) }}{{ fail "state.orgs[].users[] needs a name and roles" }}{{ end }}{{ $users = append $users (dict "name" .name "roles" .roles) }}{{ end -}}
+{{- $_ := set $o "users" $users -}}
+{{- if .clientMonitoring -}}
+{{- $cm := dict "artifacts" (include "velociraptor.collectorArgs" (.clientMonitoring.all | default list) | fromJson) -}}
+{{- $labels := list -}}
+{{- range $label, $arts := (.clientMonitoring.labels | default dict) }}{{ $labels = append $labels (dict "label" $label "artifacts" (include "velociraptor.collectorArgs" $arts | fromJson)) }}{{ end -}}
+{{- if $labels }}{{ $_ := set $cm "label_events" $labels }}{{ end -}}
+{{- $_ := set $o "clientMonitoring" (toJson $cm) -}}
+{{- end -}}
+{{- if .serverMonitoring -}}
+{{- $_ := set $o "serverMonitoring" (include "velociraptor.collectorArgs" .serverMonitoring) -}}
+{{- end -}}
+{{- $tools := list -}}
+{{- range .tools -}}
+{{- if not (and .name .url .hash) }}{{ fail "state.orgs[].tools[] needs a name, a url and a sha256 hash" }}{{ end -}}
+{{- $tools = append $tools (dict "name" .name "url" .url "hash" (trimPrefix "sha256:" .hash) "serveLocally" (.serveLocally | default false) "filename" (.filename | default "") "version" (.version | default "")) -}}
+{{- end -}}
+{{- $_ := set $o "tools" $tools -}}
+{{- $secrets := list -}}
+{{- range .secrets -}}
+{{- if not (and .name .type .fromSecret .fromSecret.name .fromSecret.key) }}{{ fail "state.orgs[].secrets[] needs a name, a type and fromSecret {name, key}" }}{{ end -}}
+{{- $secrets = append $secrets (dict "name" .name "type" .type "file" (printf "/state-secrets/%s/%s" .fromSecret.name .fromSecret.key)) -}}
+{{- end -}}
+{{- $_ := set $o "secrets" $secrets -}}
+{{- $hunts := list -}}
+{{- range .hunts -}}
+{{- if not (and .name .artifacts .every) }}{{ fail "state.orgs[].hunts[] needs a name, artifacts and every" }}{{ end -}}
+{{- $every := include "velociraptor.seconds" .every | int -}}
+{{- $h := dict "name" .name "tag" (printf "helm:%s" .name) "artifacts" .artifacts "labels" (.labels | default list) "os" (.os | default "") "everySeconds" $every "expiresSeconds" (include "velociraptor.seconds" (.expires | default .every) | int) "spec" "" -}}
+{{- with .parameters }}{{ $_ := set $h "spec" (toJson .) }}{{ end -}}
+{{- $hunts = append $hunts $h -}}
+{{- end -}}
+{{- $_ := set $o "hunts" $hunts -}}
+{{- $out = append $out $o -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end }}
+
+{{/* Kubernetes Secrets referenced by state.orgs[].secrets[].fromSecret (JSON list of names). */}}
+{{- define "velociraptor.stateSecretNames" -}}
+{{- $names := list -}}
+{{- range .Values.state.orgs }}{{ range .secrets }}{{ $names = append $names .fromSecret.name }}{{ end }}{{ end -}}
+{{- toJson ($names | uniq) -}}
 {{- end }}
 
 {{/* API clients as the reconciler sees them: [{name, roles, orgs}]. */}}
@@ -243,11 +327,11 @@ volumes:
 {{- end }}
 
 {{/* Orgs: an init container issues an in-memory API client certificate (offline), then a
-     native sidecar reconciles the declared orgs through the live API (chart/files/orgs.vql). */}}
+     native sidecar reconciles the declared state through the live API (chart/files/state.vql). */}}
 {{- define "velociraptor.orgsInitContainers" -}}
 {{- if eq (include "velociraptor.reconcilerEnabled" .) "true" }}
 {{- if not (semverCompare ">=1.29.0-0" .Capabilities.KubeVersion.Version) }}
-{{- fail "orgs.items / apiClients need Kubernetes >= 1.29 (native sidecar containers)." }}
+{{- fail "orgs.items / apiClients / state.orgs need Kubernetes >= 1.29 (native sidecar containers)." }}
 {{- end }}
 {{- range .Values.apiClients }}
 {{- if not (and .name .roles) }}{{ fail "each apiClients[] entry needs a name and roles" }}{{ end }}
@@ -255,7 +339,7 @@ volumes:
 {{- range .Values.orgs.items }}
 {{- if not (and .id .name) }}{{ fail "each orgs.items[] entry needs an id and a name" }}{{ end }}
 {{- end }}
-- name: orgs-api-client
+- name: reconciler-api-client
   image: {{ include "velociraptor.image" . }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
   args:
@@ -282,7 +366,7 @@ volumes:
     - name: tmp
       mountPath: /tmp
     {{- end }}
-- name: orgs-reconciler
+- name: state-reconciler
   image: {{ include "velociraptor.image" . }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
   # Native sidecar: a local VQL loop that never exits (so it never delays the server's
@@ -304,17 +388,19 @@ volumes:
     - --env
     - Admin={{ if .Values.gui.initialAdmin.enabled }}{{ .Values.gui.initialAdmin.username }}{{ end }}
     - --env
-    - Period={{ .Values.orgs.reconcilePeriodSeconds }}
-    - {{ .Files.Get "files/orgs.vql" | toJson }}
+    - {{ printf "State=%s" (include "velociraptor.stateJson" .) | quote }}
+    - --env
+    - Period={{ .Values.state.reconcilePeriodSeconds }}
+    - {{ .Files.Get "files/state.vql" | toJson }}
   securityContext:
     {{- toYaml .Values.securityContext | nindent 4 }}
   resources:
-    {{- toYaml .Values.orgs.resources | nindent 4 }}
+    {{- toYaml .Values.state.resources | nindent 4 }}
   volumeMounts:
     - name: api-client
       mountPath: /api
       readOnly: true
-    - name: orgs-tmp
+    - name: reconciler-tmp
       mountPath: /tmp
 {{- end }}
 {{- end }}

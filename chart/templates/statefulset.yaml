@@ -105,6 +105,12 @@ spec:
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- /* VQL secret values, read server-side by the state reconciler (never in query text). */}}
+            {{- range (include "velociraptor.stateSecretNames" . | fromJsonArray) }}
+            - name: state-secret-{{ . }}
+              mountPath: /state-secrets/{{ . }}
+              readOnly: true
+            {{- end }}
         {{- with .Values.extraContainers }}
         {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
@@ -117,14 +123,19 @@ spec:
             sizeLimit: {{ .Values.tmpDir.sizeLimit }}
         {{- end }}
         {{- if eq (include "velociraptor.reconcilerEnabled" .) "true" }}
-        # API client certificate of the orgs reconciler: memory only, gone with the pod.
+        # API client certificate of the state reconciler: memory only, gone with the pod.
         - name: api-client
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        - name: orgs-tmp
+        - name: reconciler-tmp
           emptyDir:
             sizeLimit: 64Mi
+        {{- range (include "velociraptor.stateSecretNames" . | fromJsonArray) }}
+        - name: state-secret-{{ . }}
+          secret:
+            secretName: {{ . }}
+        {{- end }}
         {{- end }}
         {{- if or (not .Values.persistence.enabled) .Values.persistence.existingClaim }}
         - name: datastore

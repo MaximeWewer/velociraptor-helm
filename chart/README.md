@@ -215,6 +215,7 @@ apiClients:
   - name: tracecat
     roles: [api, investigator]   # `api` is required to use the API; least privilege
     permissions: [EXECVE, NETWORK]  # extra permissions, see below
+    validityDays: 90             # certificate lifetime (default: the server certificates')
     orgs: [root]
 ```
 
@@ -222,14 +223,25 @@ apiClients:
   needed) and writes `<fullname>-api-<name>`: `api.config.yaml` (for
   `velociraptor --api_config`), `ca.crt`, `tls.crt`, `tls.key`, `endpoint`
   (`<fullname>-api.<ns>.svc:<port>`). Copy or sync it to the consumer's namespace.
-- **Rotate**: delete the Secret; the next install/upgrade/sync or CronJob run re-issues it.
-  **Renewal**: re-issued when it expires within `renewBeforeDays` (same validity as the server
-  certificates). The previous certificate stays valid until its own expiry, so consumers have
-  that window to reload the Secret (mount it as a volume and re-read it, or restart on change).
-- **Revocation**: Velociraptor authenticates an API client by CA signature + user name, with
-  no revocation list: re-issuing does NOT invalidate a leaked certificate. Remove the client
-  from `apiClients`, delete the user (GUI, or `user_delete(user=..., really_do_it=TRUE)`), and
-  declare a client with a **new name** (recreating the same name revives the old certificate).
+- **Renewal**: re-issued by the PKI job / daily CronJob when it expires within `renewBeforeDays`,
+  or within a third of `validityDays` if that is shorter (default validity: the server
+  certificates', e.g. 10 years). The previous certificate stays valid until its own expiry:
+  consumers have that window to reload the Secret (mount it as a volume and re-read it on
+  change or on an authentication error, or restart on change).
+- **Revocation**: Velociraptor authenticates an API client by CA signature + user name only,
+  with no revocation list: re-issuing a certificate (e.g. deleting the Secret) does NOT
+  invalidate the previous one. The chart therefore revokes by **name**:
+  - removing a client from `apiClients`, or renaming it, deletes its Velociraptor user within
+    a reconcile period: every certificate issued under that name stops working;
+  - a revoked name is never granted again (re-declaring it would revive the old certificates):
+    the sidecar reports it in `RefusedApiClients`, and also skips it in `state.orgs[].users`.
+  - To rotate after a leak: rename the client (e.g. `vr-responder` -> `vr-responder-2`). With a
+    fixed `secretName`, the Secret is re-issued in place for the new name.
+  - The ledger lives in the datastore (`<persistence.mountPath>/helm-api-clients.json`, next to
+    the users it describes); to allow a revoked name again, remove it from `revoked` there.
+  - Clients removed before this mechanism existed are not tracked: delete their users by hand.
+- Reserved names: `GRPC_GW` (the GUI gateway's certificate name: a client certificate carrying
+  it could act as any user), `velociraptor-helm` (the reconciler) and the initial admin.
 - The reconciler sidecar grants `roles` and `permissions` in `orgs` through the API; both are
   authoritative for these users (a role or permission removed here is revoked).
 - **Permissions**: artifacts can require more than a role grants. `investigator` can collect

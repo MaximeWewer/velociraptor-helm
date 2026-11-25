@@ -57,12 +57,13 @@ LET LedgerWritten <= if(condition=LedgerFile AND NewLedger != serialize(format="
 LET States <= parse_json_array(data=State)
 
 -- Materialized in this order: create the orgs, then grant ourselves (the reconciler's own API
--- user) administrator in every managed org: rights inherited from root are not enough inside
--- an org (e.g. COLLECT_SERVER is denied), an explicit grant is.
+-- user) administrator + api in every managed org: rights inherited from root are not enough
+-- inside an org (e.g. COLLECT_SERVER is denied), an explicit grant is. Since 0.77.4 only the
+-- api role carries ANY_QUERY (administrator no longer does).
 LET CreatedOrgs <= SELECT id, org_create(name=name, org_id=id).id AS OrgId FROM Missing
 LET Managed <= parse_json_array(data=ManagedOrgs)
 LET SelfGranted <= if(condition=Managed,
-    then=user_grant(user=ApiUser, roles=["administrator"], orgs=Managed))
+    then=user_grant(user=ApiUser, roles=["administrator", "api"], orgs=Managed))
 
 -- Roles and extra permissions are authoritative: user_grant replaces both (no policy = roles
 -- only), but needs an existing user, hence user_create first. policy: JSON string or "".
@@ -203,7 +204,8 @@ LET innerAttempt = SELECT * FROM foreach(row={
        R[-1].ReturnCode = 0 AS OK,
        if(condition=R[-1].ReturnCode = 0,
           then=parse_json(data=join(array=R.Stdout, sep="")),
-          else=regex_replace(source=join(array=R.Stderr, sep=""),
+          -- the CLI prints its error on stdout or stderr depending on the version
+          else=regex_replace(source=join(array=R.Stdout + R.Stderr, sep="\n"),
                              re='''(?s)^.*(velociraptor: error: [^\n]*).*$''', replace="$1")
                || "server API not reachable yet, will retry") AS Result
   FROM foreach(row={SELECT call(vql=Inner) AS R FROM scope()})

@@ -8,10 +8,10 @@
 */
 LET R <= SELECT * FROM execve(
     argv=["/velociraptor", "--nobanner", "--config", Config, "config", "api_client",
-          "--name", "velociraptor-helm", "--role", "administrator", Out],
+          "--name", "velociraptor-helm", "--role", "administrator,api", Out],
     sep="\x00\x00", length=1000000)
 LET _e1 <= if(condition=R[-1].ReturnCode != 0,
-    then=log(level="ERROR", message="api_client failed: %v", args=join(array=R.Stderr, sep="")))
+    then=log(level="ERROR", message="api_client failed: %v", args=join(array=R.Stdout + R.Stderr, sep=" ")))
 LET Fixed <= regex_replace(source=read_file(filename=Out),
     re="api_connection_string: .*", replace="api_connection_string: 127.0.0.1:" + Port)
 LET _e2 <= if(condition=NOT Fixed =~ "api_connection_string: 127.0.0.1:",

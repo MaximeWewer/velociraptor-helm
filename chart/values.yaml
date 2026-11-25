@@ -544,7 +544,8 @@ orgs:
   items: []
   #  - id: O01
   #    name: "Customer A"
-  # Reconcile period and sidecar resources: state.reconcilePeriodSeconds / state.resources.
+  # Reconcile period and sidecar resources: state.reconcilePeriodSeconds / state.resources
+  # (orgs.reconcilePeriodSeconds / orgs.resources from earlier releases are still honoured).
 
 ## Declarative per-org state, applied through the server API by the reconciler sidecar
 ## (chart/files/state.vql), every reconcilePeriodSeconds. Needs Kubernetes >= 1.29.

@@ -259,7 +259,9 @@
               "name": { "type": "string", "minLength": 1 }
             }
           }
-        }
+        },
+        "reconcilePeriodSeconds": { "type": "integer", "minimum": 10, "deprecated": true, "description": "Deprecated: use state.reconcilePeriodSeconds" },
+        "resources": { "type": "object", "deprecated": true, "description": "Deprecated: use state.resources" }
       }
     },
     "state": {

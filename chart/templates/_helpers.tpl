@@ -418,7 +418,7 @@ volumes:
     - --env
     - {{ printf "State=%s" (include "velociraptor.stateJson" .) | quote }}
     - --env
-    - Period={{ .Values.state.reconcilePeriodSeconds }}
+    - Period={{ .Values.orgs.reconcilePeriodSeconds | default .Values.state.reconcilePeriodSeconds }}
     - --env
     - {{ printf "ManagedOrgs=%s" (include "velociraptor.managedOrgs" .) | quote }}
     - --env
@@ -441,7 +441,7 @@ volumes:
   securityContext:
     {{- toYaml .Values.securityContext | nindent 4 }}
   resources:
-    {{- toYaml .Values.state.resources | nindent 4 }}
+    {{- toYaml (.Values.orgs.resources | default .Values.state.resources) | nindent 4 }}
   volumeMounts:
     - name: api-client
       mountPath: /api

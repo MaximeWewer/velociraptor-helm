@@ -13,13 +13,21 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged == true &&
        github.event.pull_request.head.ref == 'chore/update-versions')
+    # One release at a time: each one commits the stamped Chart.yaml to main.
+    concurrency:
+      group: release-helm
+      cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
+      # Always release main's tip (also on the auto-merged PR event, whose default ref is
+      # the PR merge commit), so that the stamped Chart.yaml can be pushed back to main.
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: main
 
       - name: Install Helm
         uses: azure/setup-helm@v5
@@ -33,15 +41,31 @@ jobs:
       - name: Set release version (today's date)
         id: chart
         run: |
-          # Chart.yaml carries "<base>-DD-MM-YYYY"; the date was stamped at PR-creation
-          # time. Re-stamp it with TODAY's date so the published version reflects the
-          # actual release day, then rewrite Chart.yaml so the package matches.
-          BASE=$(grep '^version:' chart/Chart.yaml | awk '{print $2}' | sed -E 's/-[0-9]{2}-[0-9]{2}-[0-9]{4}$//')
-          DATE=$(date -u +'%d-%m-%Y')
-          VERSION="${BASE}-${DATE}"
+          # Chart version = "<Velociraptor version>-DD-MM-YYYY" of the release day, whatever
+          # Chart.yaml carried before: appVersion is the Velociraptor version (kept current
+          # by update-versions.yml or by hand), the date is stamped here.
+          APP=$(grep '^appVersion:' chart/Chart.yaml | awk '{print $2}' | tr -d '"')
+          TAG=$(grep -A1 'repository: maximewewer/velociraptor' chart/values.yaml | grep -oP 'tag: "\K[^"]+')
+          if [ "$TAG" != "${APP}-distroless" ]; then
+            echo "ERROR: appVersion ${APP} does not match image.tag ${TAG} in values.yaml" >&2
+            exit 1
+          fi
+          VERSION="${APP}-$(date -u +'%d-%m-%Y')"
           sed -i "s/^version: .*/version: ${VERSION}/" chart/Chart.yaml
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Release version: ${VERSION}"
+
+      - name: Commit the stamped Chart.yaml to main
+        run: |
+          if git diff --quiet chart/Chart.yaml; then
+            echo "Chart.yaml already at ${{ steps.chart.outputs.version }}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(release): ${{ steps.chart.outputs.version }}" chart/Chart.yaml
+          # GITHUB_TOKEN pushes do not trigger other workflows (no CI loop).
+          git push origin HEAD:main
 
       - name: Login to GitHub Container Registry
         run: |

@@ -195,7 +195,11 @@ spec:
       {{- end }}
   {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
   volumeClaimTemplates:
-    - metadata:
+    # Explicit apiVersion/kind: the API server adds them to the stored object,
+    # without them Argo CD reports a permanent diff on the StatefulSet.
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: datastore
         {{- with .Values.persistence.annotations }}
         annotations:
